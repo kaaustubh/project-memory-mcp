@@ -26,32 +26,37 @@ always-loaded context small while keeping everything searchable.
 - `search_issues` — "have we hit this before?" across all projects
 - `list_open_issues`, `resolve_issue` — track / close bugs
 
-## Install (this machine)
+## Install (npm — recommended)
+
+From your code/projects folder, run:
 
 ```bash
-./install.sh
+cd ~/code            # the folder that holds your projects
+npx -y @kaaustubh/project-memory-mcp install
 ```
 
-Installs deps and registers the server with Claude Code (user scope) and Cursor.
-Restart those apps afterward. By default the server treats its **parent directory** as
-the projects root. If you cloned it somewhere else, point it at your projects folder:
+That registers the server with Claude Code (user scope) and Cursor, using the current
+directory as your projects root. Restart those apps, then ask your agent
+*"set up project memory for this folder"* to scaffold `AGENTS.md` for each project.
+
+> No clone, no global install — the MCP config just runs `npx`, which fetches and runs
+> the latest version on demand.
+
+### From source instead
 
 ```bash
-PROJECT_MEMORY_ROOT=~/code ./install.sh
+git clone https://github.com/kaaustubh/project-memory-mcp.git ~/code/.memory-server
+cd ~/code/.memory-server && ./install.sh
 ```
 
-## Replicate on another machine
+## Across machines
 
-The **server** (this repo) and the **memory content** sync separately:
+The **tool** and your **memory content** sync separately:
 
-1. **Server:** clone this repo and run `./install.sh`.
-   ```bash
-   git clone <this-repo> ~/code/.memory-server
-   cd ~/code/.memory-server && ./install.sh
-   ```
-2. **Content:** each project's `AGENTS.md` + `issues.jsonl` are committed inside that
-   project's own git repo, so cloning your projects brings their memory along. Nothing
-   to copy by hand.
+1. **Tool:** nothing to sync — `npx` always pulls the published version (or `git pull`
+   if you installed from source).
+2. **Content:** each project's `AGENTS.md` + `issues.jsonl` live inside that project's
+   own git repo, so cloning your projects brings their memory along. Nothing to copy.
 
 > `issues.jsonl` holds real bug details — only commit it into **private** repos.
 

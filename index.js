@@ -12,6 +12,7 @@ import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 // CODE_ROOT: where the projects live. Defaults to the parent of this .memory-server
 // directory (i.e. ~/code), but PROJECT_MEMORY_ROOT overrides it so the server can be
@@ -65,6 +66,30 @@ function readIssues(project) {
 }
 function writeIssues(project, entries) {
   fs.writeFileSync(issuesPath(project), entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+}
+
+// `npx @kaaustubh/project-memory-mcp install` registers this server with Claude Code +
+// Cursor, using the CURRENT directory as the projects root. Run it from your code folder.
+const PKG = "@kaaustubh/project-memory-mcp";
+if (process.argv[2] === "install") {
+  const root = process.cwd();
+  // Claude Code (user scope = every project)
+  spawnSync("claude", ["mcp", "remove", "project-memory", "-s", "user"], { stdio: "ignore" });
+  const r = spawnSync("claude",
+    ["mcp", "add", "project-memory", "-s", "user", "-e", `PROJECT_MEMORY_ROOT=${root}`, "--", "npx", "-y", PKG],
+    { stdio: "inherit" });
+  if (r.error) console.error("Claude Code registration skipped:", r.error.message);
+  // Cursor (merge so other MCP servers are preserved)
+  const cfgPath = path.join(process.env.HOME || ".", ".cursor", "mcp.json");
+  fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); } catch {}
+  cfg.mcpServers = cfg.mcpServers || {};
+  cfg.mcpServers["project-memory"] = { command: "npx", args: ["-y", PKG], env: { PROJECT_MEMORY_ROOT: root } };
+  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+  console.log(`\nRegistered project-memory (projects root: ${root}).`);
+  console.log("Restart Claude Code / Cursor, then ask your agent to \"set up project memory for this folder\".");
+  process.exit(0);
 }
 
 const server = new McpServer({ name: "project-memory", version: "1.0.0" });

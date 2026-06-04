@@ -1,9 +1,41 @@
 {
-  "name": "project-memory-mcp",
+  "name": "@kaaustubh/project-memory-mcp",
   "version": "1.0.0",
-  "private": true,
   "type": "module",
-  "description": "Local MCP server over ~/code AGENTS.md files + per-project issue logs",
+  "description": "Local MCP server giving AI coding agents (Claude Code, Cursor) a shared, persistent memory of your projects and the bugs you've faced.",
+  "bin": {
+    "project-memory": "index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "cursor",
+    "ai",
+    "memory",
+    "agents"
+  ],
+  "license": "MIT",
+  "author": "kaaustubh",
+  "homepage": "https://github.com/kaaustubh/project-memory-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kaaustubh/project-memory-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kaaustubh/project-memory-mcp/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "zod": "^3.23.0"
