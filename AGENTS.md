@@ -58,6 +58,7 @@ decisions, and every bug/issue faced during development.
 - 2026-06-04: `PROJECT_MEMORY_ROOT` env (fallback to parent dir) for portability — required for the npx case where the script lives in npm's cache.
 - 2026-06-04: No file lock — single-user, serialized usage assumed; concurrent writes are out of scope by choice.
 - 2026-06-04: Distribute via npm/npx with an `install` subcommand; scoped name `@kaaustubh/project-memory-mcp` because the bare `project-memory-mcp` was published-then-unpublished and is registry-reserved.
+- 2026-06-04: Make capture proactive (agent self-evaluates) via the MCP server `instructions` field + directive tool descriptions, rather than requiring the user to say "log this" each time. Kept it confirming-not-silent (agent reports what it logged, asks when unsure) to avoid noise/wrong-memory. A deterministic `Stop` hook for guaranteed capture was deliberately left out (per-session cost; opt-in v2).
 
 ## Learnings (gotchas — read before changing packaging)
 - 2026-06-04: **npx runs the command matching the UNSCOPED package name.** Bin must be named `project-memory-mcp` (not `project-memory`), or `npx @kaaustubh/project-memory-mcp install` fails with `sh: project-memory: command not found`. Fixed in 1.0.1.

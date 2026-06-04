@@ -92,7 +92,17 @@ if (process.argv[2] === "install") {
   process.exit(0);
 }
 
-const server = new McpServer({ name: "project-memory", version: "1.0.2" });
+// Standing capture policy — sent to the client on initialize, so it's in context every
+// session this server is loaded. Makes memory proactive (agent decides) rather than
+// requiring the user to ask each time, while staying confirming and conservative.
+const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROACTIVELY — don't wait to be asked:
+- Before debugging an error the user reports, call search_issues first to check for a prior fix.
+- After resolving a non-trivial bug, call log_issue (symptom, cause, fix).
+- After a non-obvious or architectural decision, call append_decision.
+- After discovering a durable gotcha/workaround, call append_learning.
+Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
+
+const server = new McpServer({ name: "project-memory", version: "1.0.2" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
@@ -131,7 +141,7 @@ server.registerTool("search_memory",
   });
 
 server.registerTool("append_decision",
-  { title: "Append a decision", description: "Append a dated bullet under '## Decisions' in a project's AGENTS.md (auto-loaded memory). For concise, durable decisions — NOT bugs.", inputSchema: { project: z.string(), text: z.string().describe("One line: the decision and WHY, not just what.") } },
+  { title: "Append a decision", description: "Append a dated bullet under '## Decisions' in a project's AGENTS.md (auto-loaded memory). Call this PROACTIVELY right after a non-obvious or architectural decision is made — don't wait to be asked — then tell the user in one line what you recorded. For concise, durable decisions and WHY; not bugs (use log_issue) and not trivia.", inputSchema: { project: z.string(), text: z.string().describe("One line: the decision and WHY, not just what.") } },
   async ({ project, text: t }) => {
     if (!projectExists(project)) return err(`No AGENTS.md for "${project}".`);
     appendUnderHeading(project, "Decisions", `- ${today()}: ${t}`);
@@ -139,7 +149,7 @@ server.registerTool("append_decision",
   });
 
 server.registerTool("append_learning",
-  { title: "Append a learning", description: "Append a dated bullet under '## Learnings' in a project's AGENTS.md (auto-loaded memory). For durable gotchas/workarounds — for a specific bug use log_issue instead.", inputSchema: { project: z.string(), text: z.string() } },
+  { title: "Append a learning", description: "Append a dated bullet under '## Learnings' in a project's AGENTS.md (auto-loaded memory). Call this PROACTIVELY when you discover a durable gotcha/workaround future sessions should know — don't wait to be asked — then tell the user what you recorded. For a specific bug use log_issue instead.", inputSchema: { project: z.string(), text: z.string() } },
   async ({ project, text: t }) => {
     if (!projectExists(project)) return err(`No AGENTS.md for "${project}".`);
     appendUnderHeading(project, "Learnings", `- ${today()}: ${t}`);
@@ -149,7 +159,7 @@ server.registerTool("append_learning",
 // ----------------------------- issue log (issues.jsonl, NOT auto-loaded) -----------------------------
 
 server.registerTool("log_issue",
-  { title: "Log a bug/issue", description: "Append a structured bug/issue to <project>/issues.jsonl (high-volume memory, NOT auto-loaded). Captures every problem faced during development.", inputSchema: {
+  { title: "Log a bug/issue", description: "Append a structured bug/issue to <project>/issues.jsonl (high-volume memory, NOT auto-loaded). Call this PROACTIVELY whenever you resolve (or get blocked by) a non-trivial bug — don't wait to be asked — then tell the user in one line what you logged. Skip trivial/transient issues.", inputSchema: {
       project: z.string(),
       symptom: z.string().describe("What went wrong / the observable failure."),
       cause: z.string().optional().describe("Root cause, if known."),
@@ -172,7 +182,7 @@ server.registerTool("log_issue",
   });
 
 server.registerTool("search_issues",
-  { title: "Search issues", description: "Search bug/issue history across all projects (or one). Use this to answer 'have we hit this before?'.", inputSchema: { query: z.string(), project: z.string().optional() } },
+  { title: "Search issues", description: "Search bug/issue history across all projects (or one). Call this PROACTIVELY when the user reports an error or you hit a familiar-looking failure, BEFORE debugging from scratch, to check for a prior fix ('have we hit this before?').", inputSchema: { query: z.string(), project: z.string().optional() } },
   async ({ query, project }) => {
     const q = query.toLowerCase();
     const scope = project ? [project] : listProjectDirs();

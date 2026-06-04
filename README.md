@@ -72,6 +72,22 @@ the server is **passive**. Here's the actual flow:
 In short: **a convention (auto-loaded files) + a tool the agent chooses to use + a
 one-time setup.** No magic, no daemon.
 
+## Proactive capture (you don't have to say "log this")
+
+The server ships a standing **capture policy** (sent to the client on connect, plus
+directive tool descriptions), so the agent records things on its own instead of waiting
+for you to ask:
+
+- Before debugging a reported error → it checks `search_issues` for a prior fix.
+- After fixing a non-trivial bug → it calls `log_issue`.
+- After a real decision or a durable gotcha → `append_decision` / `append_learning`.
+
+It's **proactive but not silent**: the agent tells you in one line what it recorded, asks
+when unsure rather than logging noise, and skips trivia and secrets. You can always
+override — "log this", or "don't bother". Capture reliability depends on the model
+following the policy; for guaranteed end-of-session capture you'd add a client-side hook
+(not included).
+
 ## Across machines
 
 The **tool** and your **memory content** sync separately:
