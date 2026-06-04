@@ -1,0 +1,11 @@
+{
+  "name": "project-memory-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local MCP server over ~/code AGENTS.md files + per-project issue logs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.23.0"
+  }
+}
