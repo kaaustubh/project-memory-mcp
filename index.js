@@ -92,7 +92,7 @@ if (process.argv[2] === "install") {
   process.exit(0);
 }
 
-const server = new McpServer({ name: "project-memory", version: "1.0.0" });
+const server = new McpServer({ name: "project-memory", version: "1.0.2" });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 

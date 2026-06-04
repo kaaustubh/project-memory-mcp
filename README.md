@@ -49,6 +49,29 @@ git clone https://github.com/kaaustubh/project-memory-mcp.git ~/code/.memory-ser
 cd ~/code/.memory-server && ./install.sh
 ```
 
+## How it works (after install)
+
+A common question: *"once I install it, does it just start doing things?"* Not quite —
+the server is **passive**. Here's the actual flow:
+
+1. **Restart your editor.** MCP servers are loaded at startup, so the server only
+   becomes available the next time you launch Claude Code / Cursor.
+2. **Push layer (automatic, not the server):** when you open a project, the editor reads
+   `AGENTS.md` (via `CLAUDE.md` → `@AGENTS.md`) into the model's context for you. This is
+   why the agent "just knows" what your project is — it's a built-in editor feature.
+3. **Pull layer (the server, on request):** the server announces its tools and then
+   waits. It does nothing on its own. The agent calls a tool only when it's relevant —
+   e.g. you say *"log this bug"* or *"have we hit this before?"*, or the model decides a
+   tool is useful. There's no background process or scanning.
+
+> **Day one is empty.** A fresh setup has no `AGENTS.md` files yet, so the auto-load has
+> nothing to load and `log_issue` will refuse until a project's memory exists. Bootstrap
+> once by asking your agent: *"set up project memory for this folder"* — it creates the
+> `AGENTS.md` files. After that, everything works.
+
+In short: **a convention (auto-loaded files) + a tool the agent chooses to use + a
+one-time setup.** No magic, no daemon.
+
 ## Across machines
 
 The **tool** and your **memory content** sync separately:
