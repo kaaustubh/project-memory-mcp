@@ -104,3 +104,21 @@ The **tool** and your **memory content** sync separately:
 For a new project under the root, create `<project>/CLAUDE.md` containing `@AGENTS.md`
 and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
+
+## Changelog
+
+### v1.1.0
+- **Proactive capture.** The agent now records memory on its own instead of waiting for
+  "log this": a standing capture policy is sent on `initialize` and the write/search tool
+  descriptions are directive. It stays confirming (tells you what it logged), asks when
+  unsure, and skips trivia/secrets. Explicit calls still work as an override.
+- Docs: added "How it works (after install)" and "Proactive capture" sections.
+
+### v1.0.1
+- Fix `npx … install` failing with "command not found" — the bin is renamed to
+  `project-memory-mcp` to match the unscoped package name (npx resolution rule).
+
+### v1.0.0
+- Initial release: stateless MCP server over `AGENTS.md` + `issues.jsonl`, 9 tools
+  (project memory + issue tracking), `npx … install` for Claude Code and Cursor, and the
+  push/pull memory model.
