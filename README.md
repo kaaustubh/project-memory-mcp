@@ -107,6 +107,9 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 
 ## Changelog
 
+### v1.1.1
+- Docs only: publishes the changelog to the npm page for parity (no functional change).
+
 ### v1.1.0
 - **Proactive capture.** The agent now records memory on its own instead of waiting for
   "log this": a standing capture policy is sent on `initialize` and the write/search tool

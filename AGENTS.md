@@ -66,6 +66,7 @@ decisions, and every bug/issue faced during development.
 - 2026-06-04: **Don't test packaging with `npx ./pkg.tgz`** — npx tries to exec the tarball path and fails with "Permission denied". Instead `npm install` the tarball into a temp consumer project, then invoke the bin by name.
 - 2026-06-04: **Self-exclusion:** `.memory-server` is filtered out by the dotfile check and the `SKIP` set, so the tool doesn't track itself in `list_projects`/all-project search. Direct `get_project`/`log_issue` by name still work (they use the path, not the filtered list).
 - 2026-06-04: Keep the `McpServer` version string in sync with `package.json` on each release (it's reported to the client; easy to forget).
+- 2026-06-04: **Release convention** — ANY user-facing change must: bump semver (patch=fix/docs, minor=feature), add a `## Changelog` entry in README, sync the `McpServer` version string, commit, `npm publish`, and tag `vX.Y.Z` + push tags. Docs-only changes still get a patch release so the npm page stays in parity (npm won't re-render the README without a new version).
 
 ## Known sharp edges (candidates for future work)
 - `search_issues` is substring over `JSON.stringify(entry)` — not semantic, and matches JSON keys (searching "fix" matches every resolved issue). Consider embeddings + field-scoped search if logs grow.
