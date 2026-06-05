@@ -28,6 +28,34 @@ always-loaded context small while keeping everything searchable.
 - `sync_registry` — reconcile the root `AGENTS.md` projects table with what's on disk (adds rows for new projects, flags stale ones)
 - `find_by_file` — given a file path, surface the issues + decisions/learnings that touch it ("why is this code like this?")
 
+> You don't call these directly — you talk to your agent in natural language and it picks
+> the tool. See **Using it day to day** below for what to actually say.
+
+## Using it day to day
+
+Most of it runs itself: opening a project auto-loads its `AGENTS.md` (the agent already
+knows the project), and capture is proactive (plus the optional Stop hook). Your job is
+mainly to **pull** memory at the right moments. Just talk to your agent:
+
+| When | Say something like | What fires |
+|---|---|---|
+| **Before debugging anything** | *"Have we hit this before? `<paste error>`"* | `search_issues` across all projects |
+| **Starting something you've done elsewhere** | *"How did I do Stripe webhook verification in any project?"* | `search_memory` (cross-project) |
+| **Landing on confusing code** | *"Why is `index.js` like this? Check the memory."* | `find_by_file` |
+| **You made a real decision / fixed a real bug** | *(nothing — it logs on its own and tells you)* | `append_decision` / `log_issue` |
+| **Triage** | *"What's still open across my projects?"* | `list_open_issues` |
+| **A bug is fixed** | *"Resolve pulse_stripe-004 — fixed by …"* | `resolve_issue` |
+| **Added a new project** | *"Sync the registry."* | `sync_registry` |
+
+**The one habit that matters:** make *"have we hit this before?"* reflexive before every
+debugging session. That's where a memory tool earns its keep; the rest the system handles.
+
+**Capture is confirming, not silent** — when the agent logs something it tells you in one
+line. Correct it freely: *"don't log that"*, or *"actually, log this too."*
+
+**Escape hatches:** `PROJECT_MEMORY_HOOK=off` silences the Stop hook for one session;
+`uninstall-hook` removes it entirely.
+
 ## Install (npm — recommended)
 
 From your code/projects folder, run:
@@ -127,6 +155,11 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.3.2
+- Docs: added a **"Using it day to day"** section — the natural-language prompts that map to
+  each tool, the one habit that matters ("have we hit this before?"), and the escape
+  hatches. Clarifies that you talk to the agent rather than calling tools directly.
 
 ### v1.3.1
 - **Stop hook: count direct memory edits as capture.** The hook previously recognized only

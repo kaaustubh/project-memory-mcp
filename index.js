@@ -170,7 +170,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After discovering a durable gotcha/workaround, call append_learning.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.3.1" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.3.2" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
