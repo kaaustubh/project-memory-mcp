@@ -59,6 +59,9 @@ decisions, and every bug/issue faced during development.
 - 2026-06-04: No file lock — single-user, serialized usage assumed; concurrent writes are out of scope by choice.
 - 2026-06-04: Distribute via npm/npx with an `install` subcommand; scoped name `@kaaustubh/project-memory-mcp` because the bare `project-memory-mcp` was published-then-unpublished and is registry-reserved.
 - 2026-06-04: Make capture proactive (agent self-evaluates) via the MCP server `instructions` field + directive tool descriptions, rather than requiring the user to say "log this" each time. Kept it confirming-not-silent (agent reports what it logged, asks when unsure) to avoid noise/wrong-memory. A deterministic `Stop` hook for guaranteed capture was deliberately left out (per-session cost; opt-in v2).
+- 2026-06-05 (v1.2.0): `search_issues` now matches text fields (symptom/cause/fix/id/tags) instead of `JSON.stringify(entry)` — kills false hits on JSON keys (searching "fix" no longer matches every resolved row). Chose field-scoping over embeddings to stay zero-dep/offline/stateless; `query` made optional + added `tags` filter. Pure-substring embeddings remain the deferred bigger lever.
+- 2026-06-05 (v1.2.0): Added `sync_registry` to reconcile the root projects table with on-disk dirs — additive only (adds stub rows for new projects, FLAGS stale rows but never deletes, preserves hand-curated Stack/Status/descriptions). Non-destructive by choice because the table is hand-curated and richer than project `## What this is`; `apply=false` for report-only. Automates step 4 of the root update protocol (the one manual step that actually drifts).
+- 2026-06-05 (v1.2.0): Added `find_by_file` (code↔memory linking) — finally reads the long-unused `files` field on issues, plus matches Decisions/Learnings bullets that mention a path. Answers "why is this code like this?" from memory.
 
 ## Learnings (gotchas — read before changing packaging)
 - 2026-06-04: **npx runs the command matching the UNSCOPED package name.** Bin must be named `project-memory-mcp` (not `project-memory`), or `npx @kaaustubh/project-memory-mcp install` fails with `sh: project-memory: command not found`. Fixed in 1.0.1.
@@ -69,7 +72,7 @@ decisions, and every bug/issue faced during development.
 - 2026-06-04: **Release convention** — ANY user-facing change must: bump semver (patch=fix/docs, minor=feature), add a `## Changelog` entry in README, sync the `McpServer` version string, commit, `npm publish`, and tag `vX.Y.Z` + push tags. Docs-only changes still get a patch release so the npm page stays in parity (npm won't re-render the README without a new version).
 
 ## Known sharp edges (candidates for future work)
-- `search_issues` is substring over `JSON.stringify(entry)` — not semantic, and matches JSON keys (searching "fix" matches every resolved issue). Consider embeddings + field-scoped search if logs grow.
+- `search_issues` field-scoping landed in v1.2.0 (no more JSON-key false hits); semantic/embeddings search is still the deferred bigger lever if logs grow.
 - Issue IDs are `lineCount+1` — can collide if a line is deleted or on concurrent writes.
 - `resolve_issue` rewrites the whole file (only non-append op).
 - No delete tool by design (append-only history); prune via manual file edit.

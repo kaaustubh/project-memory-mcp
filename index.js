@@ -37,6 +37,8 @@ function listProjectDirs() {
 }
 function agentsPath(project) { return path.join(ROOT, project, "AGENTS.md"); }
 function issuesPath(project) { return path.join(ROOT, project, "issues.jsonl"); }
+function rootAgentsPath() { return path.join(ROOT, "AGENTS.md"); }
+function openIssueCount(project) { return readIssues(project).filter((i) => i.status !== "resolved").length; }
 function projectExists(project) { return fs.existsSync(agentsPath(project)); }
 
 // Append a dated bullet under a "## <Heading>" section, creating it if absent.
@@ -102,7 +104,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After discovering a durable gotcha/workaround, call append_learning.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.1.1" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.2.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
@@ -114,7 +116,7 @@ server.registerTool("list_projects",
     const rows = projects.map((p) => {
       const body = fs.readFileSync(agentsPath(p), "utf8");
       const m = body.match(/##\s+What this is\s*\n+([^\n]+)/i);
-      const open = readIssues(p).filter((i) => i.status !== "resolved").length;
+      const open = openIssueCount(p);
       return `- ${p}${open ? ` (${open} open issue${open > 1 ? "s" : ""})` : ""}: ${m ? m[1].trim() : "(no summary)"}`;
     });
     return text(rows.join("\n"));
@@ -182,18 +184,25 @@ server.registerTool("log_issue",
   });
 
 server.registerTool("search_issues",
-  { title: "Search issues", description: "Search bug/issue history across all projects (or one). Call this PROACTIVELY when the user reports an error or you hit a familiar-looking failure, BEFORE debugging from scratch, to check for a prior fix ('have we hit this before?').", inputSchema: { query: z.string(), project: z.string().optional() } },
-  async ({ query, project }) => {
-    const q = query.toLowerCase();
+  { title: "Search issues", description: "Search bug/issue history across all projects (or one) over the TEXT FIELDS only (symptom, cause, fix, id, tags) — not the raw JSON, so you won't get false hits on field names like 'fix' or 'status'. Optionally filter by tags (issue must carry all of them). Either query or tags may be given. Call this PROACTIVELY when the user reports an error or you hit a familiar-looking failure, BEFORE debugging from scratch, to check for a prior fix ('have we hit this before?').", inputSchema: { query: z.string().optional().describe("Text to match against symptom/cause/fix/id/tags."), project: z.string().optional(), tags: z.array(z.string()).optional().describe("Only return issues carrying ALL of these tags.") } },
+  async ({ query, project, tags }) => {
+    const q = (query || "").toLowerCase();
+    const wantTags = (tags || []).map((t) => t.toLowerCase());
+    if (!q && !wantTags.length) return err("Provide a query and/or tags to search.");
     const scope = project ? [project] : listProjectDirs();
     const hits = [];
     for (const p of scope) {
       for (const e of readIssues(p)) {
-        if (JSON.stringify(e).toLowerCase().includes(q)) hits.push({ project: p, ...e });
+        const haystack = [e.id, e.symptom, e.cause, e.fix, ...(e.tags || [])].filter(Boolean).join(" ").toLowerCase();
+        if (q && !haystack.includes(q)) continue;
+        const etags = (e.tags || []).map((t) => t.toLowerCase());
+        if (wantTags.length && !wantTags.every((t) => etags.includes(t))) continue;
+        hits.push({ project: p, ...e });
       }
     }
-    if (!hits.length) return text(`No issues match "${query}".`);
-    return text(hits.map((h) => `[${h.id}] (${h.status}) ${h.symptom}${h.fix ? ` — fix: ${h.fix}` : ""}`).join("\n"));
+    const label = [q && `"${query}"`, wantTags.length && `tags: ${tags.join(", ")}`].filter(Boolean).join(" ");
+    if (!hits.length) return text(`No issues match ${label}.`);
+    return text(hits.map((h) => `[${h.id}] (${h.status}) ${h.symptom}${h.fix ? ` — fix: ${h.fix}` : ""}${h.tags?.length ? ` {${h.tags.join(", ")}}` : ""}`).join("\n"));
   });
 
 server.registerTool("list_open_issues",
@@ -214,6 +223,81 @@ server.registerTool("resolve_issue",
       if (e) { e.status = "resolved"; e.fix = fix; e.resolvedDate = today(); writeIssues(p, entries); return text(`Resolved ${id}.`); }
     }
     return err(`Issue "${id}" not found.`);
+  });
+
+// ----------------------------- registry sync & code↔memory linking -----------------------------
+
+server.registerTool("sync_registry",
+  { title: "Sync project registry", description: "Reconcile the root AGENTS.md projects table with what's actually on disk: list projects that have an AGENTS.md but no table row (and add a stub row for each), flag rows whose directory no longer exists, and show live open-issue counts. Automates the 'new project → add a row' step so the cross-project index never silently drifts. Hand-curated columns (Stack, Status, descriptions) are preserved — stubs use the project's '## What this is' line and leave Stack/Status as '?'. Set apply=false to report drift without writing.", inputSchema: { apply: z.boolean().optional().describe("Write stub rows for new projects (default true). false = report only.") } },
+  async ({ apply }) => {
+    const doWrite = apply !== false;
+    const file = rootAgentsPath();
+    if (!fs.existsSync(file)) return err(`No root AGENTS.md at ${file}.`);
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+
+    // Locate the projects table by its header row, then consume the contiguous |-rows after the separator.
+    const headerIdx = lines.findIndex((l) => /^\|\s*Project\s*\|/i.test(l));
+    if (headerIdx === -1) return err("Couldn't find a '| Project |' table in the root AGENTS.md.");
+    let end = headerIdx + 2; // skip header + separator
+    while (end < lines.length && lines[end].trimStart().startsWith("|")) end++;
+
+    const rowProjects = new Set();
+    for (let i = headerIdx + 2; i < end; i++) {
+      const m = lines[i].match(/\|\s*\*\*([^*]+)\*\*\s*\|/);
+      if (m) rowProjects.add(m[1].trim());
+    }
+
+    const onDisk = listProjectDirs();
+    const missing = onDisk.filter((p) => !rowProjects.has(p));         // on disk, not in table
+    const stale = [...rowProjects].filter((p) => !onDisk.includes(p)); // in table, dir gone
+
+    const stubFor = (p) => {
+      const b = fs.readFileSync(agentsPath(p), "utf8");
+      const m = b.match(/##\s+What this is\s*\n+([^\n]+)/i);
+      return `| **${p}** | ${m ? m[1].trim() : "(no summary — fill in)"} | ? | ? | [AGENTS.md](${p}/AGENTS.md) |`;
+    };
+
+    if (doWrite && missing.length) {
+      lines.splice(end, 0, ...missing.map(stubFor));
+      fs.writeFileSync(file, lines.join("\n"));
+    }
+
+    const report = [`On disk: ${onDisk.length} project(s). In table: ${rowProjects.size} row(s).`];
+    if (missing.length) report.push(`Missing from table${doWrite ? " (added stub rows)" : ""}:\n` + missing.map((p) => `  + ${p}`).join("\n"));
+    if (stale.length) report.push("Rows with no directory (review manually — not auto-removed):\n" + stale.map((p) => `  ! ${p}`).join("\n"));
+    const open = onDisk.filter((p) => openIssueCount(p) > 0);
+    if (open.length) report.push("Open issues:\n" + open.map((p) => `  • ${p}: ${openIssueCount(p)}`).join("\n"));
+    if (!missing.length && !stale.length) report.unshift("Registry is in sync. ✅");
+    return text(report.join("\n\n"));
+  });
+
+server.registerTool("find_by_file",
+  { title: "Find memory by file", description: "Given a file path or filename fragment, return the issues (matched via their 'files' field) and the decisions/learnings (matched via AGENTS.md bullets that mention it) that touch that file — i.e. 'why is this code the way it is?' answered from memory. Searches all projects unless one is given. Useful when you land on confusing code and want the history behind it.", inputSchema: { file: z.string().describe("A path or filename fragment, e.g. 'index.js' or 'auth/login'."), project: z.string().optional() } },
+  async ({ file, project }) => {
+    const needle = file.toLowerCase();
+    const scope = project ? [project] : listProjectDirs();
+    const issueHits = [];
+    const noteHits = [];
+    for (const p of scope) {
+      for (const e of readIssues(p)) {
+        if ((e.files || []).some((f) => f.toLowerCase().includes(needle))) {
+          issueHits.push(`[${e.id}] (${e.status}) ${e.symptom}${e.fix ? ` — fix: ${e.fix}` : ""}`);
+        }
+      }
+      let section = null;
+      fs.readFileSync(agentsPath(p), "utf8").split("\n").forEach((l) => {
+        const h = l.match(/^##\s+(.+?)\s*$/);
+        if (h) { section = h[1]; return; }
+        if (/^(Decisions|Learnings)/i.test(section || "") && l.trim().startsWith("- ") && l.toLowerCase().includes(needle)) {
+          noteHits.push(`${p} (${section}): ${l.trim().replace(/^-\s*/, "")}`);
+        }
+      });
+    }
+    if (!issueHits.length && !noteHits.length) return text(`No memory references "${file}".`);
+    const out = [];
+    if (issueHits.length) out.push("Issues:\n" + issueHits.join("\n"));
+    if (noteHits.length) out.push("Decisions/Learnings:\n" + noteHits.join("\n"));
+    return text(out.join("\n\n"));
   });
 
 await server.connect(new StdioServerTransport());

@@ -23,8 +23,10 @@ always-loaded context small while keeping everything searchable.
 - `list_projects`, `get_project`, `search_memory` — read project memory
 - `append_decision`, `append_learning` — append a dated bullet to `AGENTS.md`
 - `log_issue` — record a bug/problem → `issues.jsonl`
-- `search_issues` — "have we hit this before?" across all projects
+- `search_issues` — "have we hit this before?" across all projects (field-scoped; optional `tags` filter)
 - `list_open_issues`, `resolve_issue` — track / close bugs
+- `sync_registry` — reconcile the root `AGENTS.md` projects table with what's on disk (adds rows for new projects, flags stale ones)
+- `find_by_file` — given a file path, surface the issues + decisions/learnings that touch it ("why is this code like this?")
 
 ## Install (npm — recommended)
 
@@ -106,6 +108,19 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.2.0
+- **Sharper issue search.** `search_issues` now matches only the text fields
+  (symptom/cause/fix/id/tags) instead of the raw JSON, so queries no longer get false hits
+  on field names. Added an optional `tags` filter; `query` is now optional (search by tags
+  alone).
+- **`sync_registry`.** Reconciles the root `AGENTS.md` projects table with the projects on
+  disk — adds stub rows for projects missing from the table, flags rows whose directory is
+  gone, and reports live open-issue counts. Automates the previously manual "new project →
+  add a row" step. Hand-curated columns are preserved; `apply=false` reports drift only.
+- **`find_by_file`.** Given a file path/fragment, returns the issues (via their `files`
+  field) and the decisions/learnings (via AGENTS.md bullets that mention it) touching that
+  file — code↔memory linking for "why is this code the way it is?".
 
 ### v1.1.1
 - Docs only: publishes the changelog to the npm page for parity (no functional change).
