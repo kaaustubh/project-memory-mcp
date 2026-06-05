@@ -86,9 +86,28 @@ for you to ask:
 
 It's **proactive but not silent**: the agent tells you in one line what it recorded, asks
 when unsure rather than logging noise, and skips trivia and secrets. You can always
-override — "log this", or "don't bother". Capture reliability depends on the model
-following the policy; for guaranteed end-of-session capture you'd add a client-side hook
-(not included).
+override — "log this", or "don't bother". The standing policy is best-effort (it depends
+on the model following it); for a hard guarantee, add the opt-in Stop hook below.
+
+## Guaranteed capture (opt-in Stop hook)
+
+The standing policy can be forgotten mid-session. The **Stop hook** makes capture
+non-optional: when the agent tries to end a turn, it runs once and — only if real work
+happened (file edits or a commit) and **nothing** was written to project memory — blocks
+the stop and asks the agent to do one capture pass. If memory was already written, or
+nothing changed, it stays silent and lets the turn end.
+
+```bash
+npx -y @kaaustubh/project-memory-mcp install-hook    # turn it on (then restart Claude Code)
+npx -y @kaaustubh/project-memory-mcp uninstall-hook  # turn it off
+```
+
+- **Off by default** — plain `install` does not add it; you enable it explicitly.
+- **No loops** — it fires at most once per turn (guarded by `stop_hook_active`), then lets
+  the agent stop.
+- **Per-session kill switch** — set `PROJECT_MEMORY_HOOK=off` to disable without uninstalling.
+- **Cost** — it adds one extra model turn only on sessions that changed code but logged
+  nothing; silent otherwise.
 
 ## Across machines
 
@@ -108,6 +127,14 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.3.0
+- **Guaranteed capture (opt-in Stop hook).** New `install-hook` / `uninstall-hook`
+  subcommands register a Claude Code `Stop` hook that forces a single capture pass when a
+  session changed code but recorded nothing to memory — turning the best-effort policy into
+  a hard guarantee. Off by default, fires at most once per turn (no loops), silent when
+  nothing changed or memory was already written, and disablable per-session via
+  `PROJECT_MEMORY_HOOK=off`.
 
 ### v1.2.0
 - **Sharper issue search.** `search_issues` now matches only the text fields

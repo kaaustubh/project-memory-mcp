@@ -49,6 +49,10 @@ decisions, and every bug/issue faced during development.
   writes to a throwaway config instead of your real `~/.claude.json` / `~/.cursor/mcp.json`.
 - **Release:** bump `version` in BOTH `package.json` and the `McpServer({version})` string
   in `index.js`, commit, `npm publish`. `npx -y` users auto-get the latest (unpinned).
+- **Subcommands** (gated on `argv[2]`, all short-circuit before `server.connect`): `install`
+  (register MCP server), `install-hook` / `uninstall-hook` (opt-in Stop hook in
+  `~/.claude/settings.json`), `hook` (the Stop-hook entrypoint — reads the Stop payload on
+  stdin via `fs.readFileSync(0)`, decides allow vs. block).
 
 ## Decisions
 - 2026-06-04: Store content in `AGENTS.md` with a one-line `CLAUDE.md` (`@AGENTS.md`) stub — AGENTS.md is the cross-tool standard (Cursor/Codex read it), CLAUDE.md bridges it for Claude Code.
@@ -62,6 +66,8 @@ decisions, and every bug/issue faced during development.
 - 2026-06-05 (v1.2.0): `search_issues` now matches text fields (symptom/cause/fix/id/tags) instead of `JSON.stringify(entry)` — kills false hits on JSON keys (searching "fix" no longer matches every resolved row). Chose field-scoping over embeddings to stay zero-dep/offline/stateless; `query` made optional + added `tags` filter. Pure-substring embeddings remain the deferred bigger lever.
 - 2026-06-05 (v1.2.0): Added `sync_registry` to reconcile the root projects table with on-disk dirs — additive only (adds stub rows for new projects, FLAGS stale rows but never deletes, preserves hand-curated Stack/Status/descriptions). Non-destructive by choice because the table is hand-curated and richer than project `## What this is`; `apply=false` for report-only. Automates step 4 of the root update protocol (the one manual step that actually drifts).
 - 2026-06-05 (v1.2.0): Added `find_by_file` (code↔memory linking) — finally reads the long-unused `files` field on issues, plus matches Decisions/Learnings bullets that mention a path. Answers "why is this code like this?" from memory.
+- 2026-06-05 (v1.3.0): Shipped the previously-deferred guaranteed-capture Stop hook, but as a SEPARATE concern from the MCP server: it's a `hook` subcommand of index.js, registered via `install-hook` into `~/.claude/settings.json`, NOT part of the server's tool surface. Kept OFF by default (plain `install` doesn't add it) because of the per-session cost called out when it was deferred. The hook is a gate, not the capturer — it blocks the stop ONCE (guarded by `stop_hook_active`) and only when work happened (Edit/Write/commit) with no project-memory write; the model still does the actual logging. So "guaranteed" = guaranteed to be ASKED, not silently auto-logged (keeps the confirming-not-silent principle).
+- 2026-06-05 (v1.3.0): Hook command uses absolute `node <abspath>/index.js hook` for source installs, falling back to `npx -y PKG hook` when running from an npm/npx cache (detected via `_npx`/`.npm`/`node_modules` in the script path) — mirrors the server registration's npx approach and avoids baking a volatile cache path into settings.json.
 
 ## Learnings (gotchas — read before changing packaging)
 - 2026-06-04: **npx runs the command matching the UNSCOPED package name.** Bin must be named `project-memory-mcp` (not `project-memory`), or `npx @kaaustubh/project-memory-mcp install` fails with `sh: project-memory: command not found`. Fixed in 1.0.1.
@@ -70,6 +76,7 @@ decisions, and every bug/issue faced during development.
 - 2026-06-04: **Self-exclusion:** `.memory-server` is filtered out by the dotfile check and the `SKIP` set, so the tool doesn't track itself in `list_projects`/all-project search. Direct `get_project`/`log_issue` by name still work (they use the path, not the filtered list).
 - 2026-06-04: Keep the `McpServer` version string in sync with `package.json` on each release (it's reported to the client; easy to forget).
 - 2026-06-04: **Release convention** — ANY user-facing change must: bump semver (patch=fix/docs, minor=feature), add a `## Changelog` entry in README, sync the `McpServer` version string, commit, `npm publish`, and tag `vX.Y.Z` + push tags. Docs-only changes still get a patch release so the npm page stays in parity (npm won't re-render the README without a new version).
+- 2026-06-05: **Subcommands must read stdin SYNCHRONOUSLY** (`fs.readFileSync(0)`), not via async `process.stdin` handlers. The whole file runs top-to-bottom to `await server.connect(...)`; an async stdin handler returns immediately and the code falls through to ALSO start the MCP server. Synchronous read blocks until EOF, then `process.exit(0)` — no fall-through. (Affects the `hook` subcommand.)
 
 ## Known sharp edges (candidates for future work)
 - `search_issues` field-scoping landed in v1.2.0 (no more JSON-key false hits); semantic/embeddings search is still the deferred bigger lever if logs grow.

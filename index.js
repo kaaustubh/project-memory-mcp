@@ -94,6 +94,66 @@ if (process.argv[2] === "install") {
   process.exit(0);
 }
 
+// `... hook` — Stop-hook entrypoint for OPT-IN "guaranteed capture". Claude Code runs this
+// when the agent is about to stop and pipes the Stop payload on stdin. At most ONCE per
+// session (guarded by stop_hook_active) we block the stop to force a capture pass — but
+// only when real work happened (file edits / a commit) AND nothing was written to project
+// memory yet. Otherwise we allow the stop silently. Capture stays the model's job; the hook
+// just guarantees it gets ASKED once. PROJECT_MEMORY_HOOK=off is a per-session kill switch.
+if (process.argv[2] === "hook") {
+  const allow = () => process.exit(0); // exit 0 with no decision = let the agent stop
+  if (process.env.PROJECT_MEMORY_HOOK === "off") allow();
+  let data = {};
+  try { data = JSON.parse(fs.readFileSync(0, "utf8")); } catch {}
+  if (data.stop_hook_active) allow(); // we already nudged once this turn — don't loop
+
+  let captured = false, didWork = false;
+  const tx = data.transcript_path;
+  if (tx && fs.existsSync(tx)) {
+    for (const line of fs.readFileSync(tx, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      let ev; try { ev = JSON.parse(line); } catch { continue; }
+      const content = ev?.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const b of content) {
+        if (b?.type !== "tool_use") continue;
+        const n = b.name || "";
+        if (/project-memory__(log_issue|append_decision|append_learning|resolve_issue)/.test(n)) captured = true;
+        if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(n)) didWork = true;
+        if (n === "Bash" && /git\s+commit/.test(b.input?.command || "")) didWork = true;
+      }
+    }
+  }
+  if (captured || !didWork) allow(); // nothing changed, or already recorded → no nag
+
+  const reason = "Before ending this session: code changed but nothing was saved to project memory. Review what happened and, if a future session should know it, call the project-memory tools — log_issue (a non-trivial bug + its fix), append_decision (a real/architectural choice + WHY), or append_learning (a durable gotcha). Then report in one line what you logged. If genuinely nothing is worth saving, say so briefly and stop.";
+  process.stdout.write(JSON.stringify({ decision: "block", reason }) + "\n");
+  process.exit(0);
+}
+
+// `... install-hook` / `... uninstall-hook` — register/remove the Stop hook above in
+// ~/.claude/settings.json (Claude Code). OPT-IN by design: plain `install` does NOT add it.
+if (process.argv[2] === "install-hook" || process.argv[2] === "uninstall-hook") {
+  const removing = process.argv[2] === "uninstall-hook";
+  const settingsPath = path.join(process.env.HOME || ".", ".claude", "settings.json");
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
+  // Stable absolute path when installed from source; fall back to npx from the cache.
+  const fromCache = /[/\\](_npx|\.npm|node_modules)[/\\]/.test(HERE);
+  const command = fromCache ? `npx -y ${PKG} hook` : `node "${path.join(HERE, "index.js")}" hook`;
+  const isOurs = (g) => (g?.hooks || []).some((x) => /project-memory.*hook|index\.js" hook/.test(x.command || ""));
+  cfg.hooks = cfg.hooks || {};
+  cfg.hooks.Stop = (cfg.hooks.Stop || []).filter((g) => !isOurs(g)); // drop any prior copy (idempotent)
+  if (!removing) cfg.hooks.Stop.push({ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] });
+  if (!cfg.hooks.Stop.length) delete cfg.hooks.Stop;
+  fs.writeFileSync(settingsPath, JSON.stringify(cfg, null, 2) + "\n");
+  console.log(removing
+    ? `Removed project-memory Stop hook from ${settingsPath}.`
+    : `Installed project-memory Stop hook in ${settingsPath}:\n  ${command}\nGuaranteed-capture is ON. Restart Claude Code. Per-session off: PROJECT_MEMORY_HOOK=off · remove: uninstall-hook.`);
+  process.exit(0);
+}
+
 // Standing capture policy — sent to the client on initialize, so it's in context every
 // session this server is loaded. Makes memory proactive (agent decides) rather than
 // requiring the user to ask each time, while staying confirming and conservative.
@@ -104,7 +164,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After discovering a durable gotcha/workaround, call append_learning.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.2.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.3.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
