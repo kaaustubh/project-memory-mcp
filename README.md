@@ -128,6 +128,16 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 
 ## Changelog
 
+### v1.3.1
+- **Stop hook: count direct memory edits as capture.** The hook previously recognized only
+  `mcp__project-memory__*` tool calls, so editing `AGENTS.md` / `issues.jsonl` directly
+  (an endorsed capture path) still triggered the nag. It now also treats an `Edit`/`Write`
+  to a file ending in `AGENTS.md` or `issues.jsonl` as captured — eliminating the false
+  positive.
+- **`append_decision`/`append_learning`: no more duplicate sections.** Heading matching was
+  whole-line (`^## Learnings$`), so a heading with trailing text (`## Learnings (gotchas …)`)
+  wasn't found and a duplicate section got appended. Now matches the heading's leading word.
+
 ### v1.3.0
 - **Guaranteed capture (opt-in Stop hook).** New `install-hook` / `uninstall-hook`
   subcommands register a Claude Code `Stop` hook that forces a single capture pass when a

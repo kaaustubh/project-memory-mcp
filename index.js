@@ -46,7 +46,9 @@ function appendUnderHeading(project, heading, bullet) {
   const file = agentsPath(project);
   let body = fs.readFileSync(file, "utf8");
   const lines = body.split("\n");
-  const re = new RegExp(`^##\\s+${heading}\\s*$`, "i");
+  // Match the heading by its leading word so "## Learnings (gotchas …)" still resolves
+  // to the existing section instead of spawning a duplicate "## Learnings".
+  const re = new RegExp(`^##\\s+${heading}\\b`, "i");
   const idx = lines.findIndex((l) => re.test(l));
   if (idx === -1) {
     if (!body.endsWith("\n")) body += "\n";
@@ -119,7 +121,11 @@ if (process.argv[2] === "hook") {
         if (b?.type !== "tool_use") continue;
         const n = b.name || "";
         if (/project-memory__(log_issue|append_decision|append_learning|resolve_issue)/.test(n)) captured = true;
-        if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(n)) didWork = true;
+        if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(n)) {
+          didWork = true;
+          // Direct edits to the memory files ARE capture (this repo's blessed path), not just MCP-tool calls.
+          if (/(^|\/)(AGENTS\.md|issues\.jsonl)$/.test(b.input?.file_path || "")) captured = true;
+        }
         if (n === "Bash" && /git\s+commit/.test(b.input?.command || "")) didWork = true;
       }
     }
@@ -164,7 +170,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After discovering a durable gotcha/workaround, call append_learning.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.3.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.3.1" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
