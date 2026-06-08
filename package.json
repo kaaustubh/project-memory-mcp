@@ -1,6 +1,6 @@
 {
   "name": "@kaaustubh/project-memory-mcp",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "type": "module",
   "description": "Local MCP server giving AI coding agents (Claude Code, Cursor) a shared, persistent memory of your projects and the bugs you've faced.",
   "bin": {

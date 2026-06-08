@@ -41,9 +41,8 @@ function rootAgentsPath() { return path.join(ROOT, "AGENTS.md"); }
 function openIssueCount(project) { return readIssues(project).filter((i) => i.status !== "resolved").length; }
 function projectExists(project) { return fs.existsSync(agentsPath(project)); }
 
-// Append a dated bullet under a "## <Heading>" section, creating it if absent.
-function appendUnderHeading(project, heading, bullet) {
-  const file = agentsPath(project);
+// Append a dated bullet under a "## <Heading>" section of any AGENTS.md, creating it if absent.
+function appendBulletToFile(file, heading, bullet) {
   let body = fs.readFileSync(file, "utf8");
   const lines = body.split("\n");
   // Match the heading by its leading word so "## Learnings (gotchas …)" still resolves
@@ -59,6 +58,9 @@ function appendUnderHeading(project, heading, bullet) {
     body = lines.join("\n");
   }
   fs.writeFileSync(file, body);
+}
+function appendUnderHeading(project, heading, bullet) {
+  appendBulletToFile(agentsPath(project), heading, bullet);
 }
 
 function readIssues(project) {
@@ -109,31 +111,48 @@ if (process.argv[2] === "hook") {
   try { data = JSON.parse(fs.readFileSync(0, "utf8")); } catch {}
   if (data.stop_hook_active) allow(); // we already nudged once this turn — don't loop
 
-  let captured = false, didWork = false;
+  // Behavioural-correction phrases in the user's typed text — a one-off correction the
+  // agent should turn into a remembered preference. Kept reasonably specific to avoid noise.
+  const CORRECTION_RE = /\b(no,?\s+(please\s+)?don'?t|don'?t\s+do\s+that|stop\s+doing\s+that|i\s+told\s+you|from\s+now\s+on|never\s+(do|add|use|put)|always\s+(use|do|run)|i'?d\s+rather|instead,?\s+(use|do)|that'?s\s+not\s+how)\b/i;
+
+  let captured = false, didWork = false, corrected = false, prefSaved = false;
   const tx = data.transcript_path;
   if (tx && fs.existsSync(tx)) {
     for (const line of fs.readFileSync(tx, "utf8").split("\n")) {
       if (!line.trim()) continue;
       let ev; try { ev = JSON.parse(line); } catch { continue; }
-      const content = ev?.message?.content;
+      const msg = ev?.message;
+      const content = msg?.content;
+      // Scan the user's TYPED text (string, or text blocks — not tool_result) for corrections.
+      if (msg?.role === "user") {
+        const userText = typeof content === "string" ? content
+          : Array.isArray(content) ? content.filter((b) => b?.type === "text").map((b) => b.text || "").join(" ") : "";
+        if (CORRECTION_RE.test(userText)) corrected = true;
+      }
       if (!Array.isArray(content)) continue;
       for (const b of content) {
         if (b?.type !== "tool_use") continue;
         const n = b.name || "";
         if (/project-memory__(log_issue|append_decision|append_learning|resolve_issue)/.test(n)) captured = true;
+        if (/project-memory__remember_preference/.test(n)) { captured = true; prefSaved = true; }
         if (/^(Edit|Write|MultiEdit|NotebookEdit)$/.test(n)) {
           didWork = true;
           // Direct edits to the memory files ARE capture (this repo's blessed path), not just MCP-tool calls.
-          if (/(^|\/)(AGENTS\.md|issues\.jsonl)$/.test(b.input?.file_path || "")) captured = true;
+          if (/(^|\/)(AGENTS\.md|issues\.jsonl)$/.test(b.input?.file_path || "")) { captured = true; prefSaved = true; }
         }
         if (n === "Bash" && /git\s+commit/.test(b.input?.command || "")) didWork = true;
       }
     }
   }
-  if (captured || !didWork) allow(); // nothing changed, or already recorded → no nag
+  const needWorkCapture = didWork && !captured;     // code changed, nothing saved
+  const needPrefCapture = corrected && !prefSaved;  // user corrected how you work, no preference saved
+  if (!needWorkCapture && !needPrefCapture) allow(); // nothing changed/corrected, or already recorded → no nag
 
-  const reason = "Before ending this session: code changed but nothing was saved to project memory. Review what happened and, if a future session should know it, call the project-memory tools — log_issue (a non-trivial bug + its fix), append_decision (a real/architectural choice + WHY), or append_learning (a durable gotcha). Then report in one line what you logged. If genuinely nothing is worth saving, say so briefly and stop.";
-  process.stdout.write(JSON.stringify({ decision: "block", reason }) + "\n");
+  const parts = ["Before ending this session:"];
+  if (needWorkCapture) parts.push("code changed but nothing was saved to project memory — if a future session should know it, call log_issue (a non-trivial bug + its fix), append_decision (a real/architectural choice + WHY), or append_learning (a durable gotcha).");
+  if (needPrefCapture) parts.push("the user corrected how you work — if it's a durable preference/habit (style, workflow, a 'from now on' rule), call remember_preference (scope 'global' for a cross-project habit, else 'project') so it's recalled and applied next time instead of being corrected again.");
+  parts.push("Then report in one line what you saved. If genuinely nothing is worth saving, say so briefly and stop.");
+  process.stdout.write(JSON.stringify({ decision: "block", reason: parts.join(" ") }) + "\n");
   process.exit(0);
 }
 
@@ -168,9 +187,10 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After resolving a non-trivial bug, call log_issue (symptom, cause, fix).
 - After a non-obvious or architectural decision, call append_decision.
 - After discovering a durable gotcha/workaround, call append_learning.
+- After the user corrects how you work, or states a durable preference (code style, workflow habit, a "from now on" rule), call remember_preference — scope "global" for a cross-project habit, "project" for one project. Preferences ride the auto-loaded AGENTS.md, so they come back next session and turn a one-time correction into a remembered pattern.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.3.2" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.4.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
@@ -222,6 +242,26 @@ server.registerTool("append_learning",
     if (!projectExists(project)) return err(`No AGENTS.md for "${project}".`);
     appendUnderHeading(project, "Learnings", `- ${today()}: ${t}`);
     return text(`Recorded learning in ${project}/AGENTS.md.`);
+  });
+
+server.registerTool("remember_preference",
+  { title: "Remember a preference", description: "Append a dated bullet under '## Preferences' in an AGENTS.md (auto-loaded memory), turning a user correction or stated habit into a remembered pattern that comes back next session. Call this PROACTIVELY when the user corrects HOW you work or states a durable preference — code style, workflow habit, a 'from now on' rule (e.g. 'never add a co-author trailer', 'always run the typecheck before committing') — don't wait to be asked, then tell the user in one line what you saved. Use scope 'global' (root AGENTS.md, applies to EVERY project) for a cross-project habit; scope 'project' for a preference about one project. This is about agent behaviour/preferences; for a project DECISION use append_decision, for a bug use log_issue.", inputSchema: {
+      text: z.string().describe("The preference as a durable rule, ideally with a short WHY. Phrase it as guidance for next time, not a one-off."),
+      scope: z.enum(["global", "project"]).optional().describe("'global' = root AGENTS.md (every project). 'project' = one project. Defaults to global, unless only a project is given."),
+      project: z.string().optional().describe("Required when scope is 'project'."),
+  } },
+  async ({ text: t, scope, project }) => {
+    const useGlobal = scope === "global" || (!scope && !project);
+    if (useGlobal) {
+      const file = rootAgentsPath();
+      if (!fs.existsSync(file)) return err(`No root AGENTS.md at ${file} to hold global preferences.`);
+      appendBulletToFile(file, "Preferences", `- ${today()}: ${t}`);
+      return text(`Recorded GLOBAL preference in root AGENTS.md (applies to every project).`);
+    }
+    if (!project) return err(`scope "project" needs a project name.`);
+    if (!projectExists(project)) return err(`No AGENTS.md for "${project}".`);
+    appendUnderHeading(project, "Preferences", `- ${today()}: ${t}`);
+    return text(`Recorded preference in ${project}/AGENTS.md.`);
   });
 
 // ----------------------------- issue log (issues.jsonl, NOT auto-loaded) -----------------------------

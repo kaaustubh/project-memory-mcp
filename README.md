@@ -22,6 +22,7 @@ always-loaded context small while keeping everything searchable.
 
 - `list_projects`, `get_project`, `search_memory` — read project memory
 - `append_decision`, `append_learning` — append a dated bullet to `AGENTS.md`
+- `remember_preference` — turn a correction / stated habit into a remembered pattern (`## Preferences` in the root `AGENTS.md` for a global habit, or a project's for a local one); rides the auto-load, so it comes back next session
 - `log_issue` — record a bug/problem → `issues.jsonl`
 - `search_issues` — "have we hit this before?" across all projects (field-scoped; optional `tags` filter)
 - `list_open_issues`, `resolve_issue` — track / close bugs
@@ -43,6 +44,7 @@ mainly to **pull** memory at the right moments. Just talk to your agent:
 | **Starting something you've done elsewhere** | *"How did I do Stripe webhook verification in any project?"* | `search_memory` (cross-project) |
 | **Landing on confusing code** | *"Why is `index.js` like this? Check the memory."* | `find_by_file` |
 | **You made a real decision / fixed a real bug** | *(nothing — it logs on its own and tells you)* | `append_decision` / `log_issue` |
+| **You correct how the agent works** | *"No, always run the typecheck before committing — remember that."* | `remember_preference` (global or per-project) |
 | **Triage** | *"What's still open across my projects?"* | `list_open_issues` |
 | **A bug is fixed** | *"Resolve pulse_stripe-004 — fixed by …"* | `resolve_issue` |
 | **Added a new project** | *"Sync the registry."* | `sync_registry` |
@@ -111,6 +113,7 @@ for you to ask:
 - Before debugging a reported error → it checks `search_issues` for a prior fix.
 - After fixing a non-trivial bug → it calls `log_issue`.
 - After a real decision or a durable gotcha → `append_decision` / `append_learning`.
+- After you correct how it works or state a habit → `remember_preference`, so the one-time correction becomes a pattern it brings back next session.
 
 It's **proactive but not silent**: the agent tells you in one line what it recorded, asks
 when unsure rather than logging noise, and skips trivia and secrets. You can always
@@ -120,10 +123,11 @@ on the model following it); for a hard guarantee, add the opt-in Stop hook below
 ## Guaranteed capture (opt-in Stop hook)
 
 The standing policy can be forgotten mid-session. The **Stop hook** makes capture
-non-optional: when the agent tries to end a turn, it runs once and — only if real work
-happened (file edits or a commit) and **nothing** was written to project memory — blocks
-the stop and asks the agent to do one capture pass. If memory was already written, or
-nothing changed, it stays silent and lets the turn end.
+non-optional: when the agent tries to end a turn, it runs once and blocks the stop to ask
+for one capture pass when either (a) real work happened (file edits or a commit) and
+**nothing** was written to project memory, or (b) you **corrected how it works** and no
+preference was saved. If memory was already written, or nothing changed and you didn't
+correct it, the hook stays silent and lets the turn end.
 
 ```bash
 npx -y @kaaustubh/project-memory-mcp install-hook    # turn it on (then restart Claude Code)
@@ -135,7 +139,7 @@ npx -y @kaaustubh/project-memory-mcp uninstall-hook  # turn it off
   the agent stop.
 - **Per-session kill switch** — set `PROJECT_MEMORY_HOOK=off` to disable without uninstalling.
 - **Cost** — it adds one extra model turn only on sessions that changed code but logged
-  nothing; silent otherwise.
+  nothing, or where you corrected the agent and no preference was saved; silent otherwise.
 
 ## Across machines
 
@@ -155,6 +159,20 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.4.0
+- **`remember_preference` — corrections become remembered patterns.** New tool that writes a
+  dated bullet under `## Preferences`, either in the **root** `AGENTS.md` (scope `global` —
+  applies to every project) or a single project's. Because preferences live in the
+  auto-loaded `AGENTS.md`, recall is free: a one-time correction ("never add a co-author
+  trailer", "always typecheck before committing") comes back next session and is applied
+  instead of re-corrected. Closes the cross-session loop for *how you like to work*, not just
+  project facts.
+- **Correction-aware Stop hook + capture policy.** The standing policy now nudges
+  `remember_preference` after a correction, and the opt-in Stop hook scans the session for
+  behavioural-correction phrases ("from now on…", "no, don't…", "always use…"): if you
+  corrected the agent and no preference was saved, it blocks the stop once to ask — a second,
+  independent reason alongside the existing "code changed but nothing logged" check.
 
 ### v1.3.2
 - Docs: added a **"Using it day to day"** section — the natural-language prompts that map to
