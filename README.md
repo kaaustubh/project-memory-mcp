@@ -160,6 +160,10 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 
 ## Changelog
 
+### v1.4.1
+- Packaging: add the `mcpName` field (`io.github.kaaustubh/project-memory-mcp`) required to list
+  the server in the official MCP Registry. No functional change.
+
 ### v1.4.0
 - **`remember_preference` — corrections become remembered patterns.** New tool that writes a
   dated bullet under `## Preferences`, either in the **root** `AGENTS.md` (scope `global` —
