@@ -141,6 +141,29 @@ npx -y @kaaustubh/project-memory-mcp uninstall-hook  # turn it off
 - **Cost** — it adds one extra model turn only on sessions that changed code but logged
   nothing, or where you corrected the agent and no preference was saved; silent otherwise.
 
+## Automatic recall (opt-in UserPromptSubmit hook)
+
+Capture is only half the loop — the other half is *remembering to look*. The **recall hook**
+closes it: every time you submit a prompt, it keyword-matches your request against your issue
+history and decisions/learnings/preferences, and silently injects the strongest hits as
+context. So a prior fix or decision surfaces **without you (or the agent) remembering to
+search** — the "have we hit this before?" habit becomes automatic.
+
+```bash
+npx -y @kaaustubh/project-memory-mcp install-recall    # turn it on (then restart Claude Code)
+npx -y @kaaustubh/project-memory-mcp uninstall-recall   # turn it off
+```
+
+- **Silent unless relevant** — injects nothing for trivial prompts or when there's no match;
+  generic filler words ("fix", "error", "bug") are ignored so it doesn't fire on everything.
+- **Ranked & capped** — current-project hits rank highest; at most 4 lines are injected.
+- **Off by default** — like the Stop hook, it's opt-in (per-prompt cost). Plain `install` adds
+  neither hook.
+- **Per-session kill switch** — set `PROJECT_MEMORY_RECALL=off` to disable without uninstalling.
+
+> Pair it with the Stop hook and the loop runs itself: the Stop hook guarantees things get
+> *saved*, the recall hook guarantees they come *back* at the right moment.
+
 ## Across machines
 
 The **tool** and your **memory content** sync separately:
@@ -159,6 +182,15 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.5.0
+- **Automatic recall (opt-in `UserPromptSubmit` hook).** New `install-recall` / `uninstall-recall`
+  subcommands register a hook that keyword-matches every prompt against your issue history and
+  decisions/learnings/preferences and silently injects the strongest hits as context — so prior
+  fixes and decisions surface without anyone remembering to search. Closes the other half of the
+  capture↔recall loop. Silent on trivial/no-match prompts (generic filler words ignored),
+  current-project hits ranked highest, at most 4 lines injected. Off by default; per-session kill
+  switch `PROJECT_MEMORY_RECALL=off`.
 
 ### v1.4.1
 - Packaging: add the `mcpName` field (`io.github.kaaustubh/project-memory-mcp`) required to list

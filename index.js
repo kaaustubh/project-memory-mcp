@@ -156,26 +156,80 @@ if (process.argv[2] === "hook") {
   process.exit(0);
 }
 
-// `... install-hook` / `... uninstall-hook` — register/remove the Stop hook above in
-// ~/.claude/settings.json (Claude Code). OPT-IN by design: plain `install` does NOT add it.
-if (process.argv[2] === "install-hook" || process.argv[2] === "uninstall-hook") {
-  const removing = process.argv[2] === "uninstall-hook";
+// `... recall` — UserPromptSubmit-hook entrypoint for OPT-IN "auto-recall". Claude Code runs
+// this when you submit a prompt and pipes the prompt on stdin; we keyword-match it against the
+// issue history + decisions/learnings/preferences and inject the strongest hits as context, so
+// prior fixes/decisions surface WITHOUT anyone remembering to search. Silent (exit 0, no output)
+// when nothing is relevant. PROJECT_MEMORY_RECALL=off is a per-session kill switch.
+if (process.argv[2] === "recall") {
+  if (process.env.PROJECT_MEMORY_RECALL === "off") process.exit(0);
+  let data = {};
+  try { data = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(0); }
+  const prompt = (data.prompt || "").toLowerCase();
+  if (!prompt) process.exit(0);
+
+  // Generic English + dev-filler words carry no discriminating signal (nearly every issue
+  // contains "error"/"fix"/"code"), so drop them — only domain words remain as keywords.
+  const STOP = new Set("the and for with this that from have what when where which your you are was can has not but get set use why how who will into out off should would could please help need want make made does did done file files code line lines error errors issue issues bug bugs fix fixes fixed run running test tests function add added new using used work works working change changes about there their then them they here have just like more some only also into your".split(/\s+/));
+  const words = [...new Set(prompt.match(/[a-z0-9_]{4,}/g) || [])].filter((w) => !STOP.has(w));
+  if (!words.length) process.exit(0);
+
+  // Which project are we in? (cwd inside ROOT/<project>) — current-project hits rank higher.
+  let current = null;
+  try { const rel = path.relative(ROOT, data.cwd || ""); if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) current = rel.split(path.sep)[0]; } catch {}
+
+  const score = (hay) => { const h = hay.toLowerCase(); let s = 0; for (const w of words) if (h.includes(w)) s++; return s; };
+  const keep = (s, p) => s >= 2 || (s >= 1 && p === current); // cross-project needs 2 keyword hits; current project 1
+  const hits = [];
+  for (const p of listProjectDirs()) {
+    for (const e of readIssues(p)) {
+      const s = score([e.id, e.symptom, e.cause, e.fix, ...(e.tags || [])].filter(Boolean).join(" "));
+      if (keep(s, p)) hits.push({ kind: "issue", project: p, score: s + (p === current ? 1 : 0), text: `[${e.id}] (${e.status}) ${e.symptom}${e.fix ? ` — fix: ${e.fix}` : ""}` });
+    }
+    let section = null;
+    for (const l of fs.readFileSync(agentsPath(p), "utf8").split("\n")) {
+      const h = l.match(/^##\s+(.+?)\s*$/);
+      if (h) { section = (h[1].split(/\s/)[0] || "").toLowerCase(); continue; }
+      if (/^(decisions|learnings|preferences)$/.test(section || "") && l.trim().startsWith("- ")) {
+        const s = score(l);
+        if (keep(s, p)) hits.push({ kind: section.replace(/s$/, ""), project: p, score: s + (p === current ? 1 : 0), text: l.trim().replace(/^-\s*/, "") });
+      }
+    }
+  }
+  if (!hits.length) process.exit(0);
+  hits.sort((a, b) => b.score - a.score);
+  const top = hits.slice(0, 4).map((h) => `• ${h.kind === "issue" ? "" : h.kind + " "}${h.project !== current ? `(${h.project}) ` : ""}${h.text}`);
+  const ctx = `🧠 project-memory — possibly relevant to this request (you may have solved or decided this before; call search_issues / find_by_file / get_project for full detail before re-solving):\n${top.join("\n")}`;
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: ctx } }) + "\n");
+  process.exit(0);
+}
+
+// `... install-hook|uninstall-hook` (Stop = guaranteed-capture) and
+// `... install-recall|uninstall-recall` (UserPromptSubmit = auto-recall) — register/remove the
+// respective hook in ~/.claude/settings.json. Both OPT-IN: plain `install` adds NEITHER.
+if (["install-hook", "uninstall-hook", "install-recall", "uninstall-recall"].includes(process.argv[2])) {
+  const removing = process.argv[2].startsWith("uninstall");
+  const isRecall = process.argv[2].endsWith("recall");
+  const event = isRecall ? "UserPromptSubmit" : "Stop";
+  const sub = isRecall ? "recall" : "hook";
   const settingsPath = path.join(process.env.HOME || ".", ".claude", "settings.json");
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
   let cfg = {};
   try { cfg = JSON.parse(fs.readFileSync(settingsPath, "utf8")); } catch {}
   // Stable absolute path when installed from source; fall back to npx from the cache.
   const fromCache = /[/\\](_npx|\.npm|node_modules)[/\\]/.test(HERE);
-  const command = fromCache ? `npx -y ${PKG} hook` : `node "${path.join(HERE, "index.js")}" hook`;
-  const isOurs = (g) => (g?.hooks || []).some((x) => /project-memory.*hook|index\.js" hook/.test(x.command || ""));
+  const command = fromCache ? `npx -y ${PKG} ${sub}` : `node "${path.join(HERE, "index.js")}" ${sub}`;
+  const isOurs = (g) => (g?.hooks || []).some((x) => new RegExp(`project-memory.*${sub}\\b|index\\.js" ${sub}\\b`).test(x.command || ""));
   cfg.hooks = cfg.hooks || {};
-  cfg.hooks.Stop = (cfg.hooks.Stop || []).filter((g) => !isOurs(g)); // drop any prior copy (idempotent)
-  if (!removing) cfg.hooks.Stop.push({ matcher: "*", hooks: [{ type: "command", command, timeout: 30 }] });
-  if (!cfg.hooks.Stop.length) delete cfg.hooks.Stop;
+  cfg.hooks[event] = (cfg.hooks[event] || []).filter((g) => !isOurs(g)); // drop any prior copy (idempotent)
+  if (!removing) cfg.hooks[event].push({ matcher: "*", hooks: [{ type: "command", command, timeout: isRecall ? 10 : 30 }] });
+  if (!cfg.hooks[event].length) delete cfg.hooks[event];
   fs.writeFileSync(settingsPath, JSON.stringify(cfg, null, 2) + "\n");
+  const what = isRecall ? "auto-recall (UserPromptSubmit)" : "guaranteed-capture (Stop)";
+  const off = isRecall ? "PROJECT_MEMORY_RECALL=off" : "PROJECT_MEMORY_HOOK=off";
   console.log(removing
-    ? `Removed project-memory Stop hook from ${settingsPath}.`
-    : `Installed project-memory Stop hook in ${settingsPath}:\n  ${command}\nGuaranteed-capture is ON. Restart Claude Code. Per-session off: PROJECT_MEMORY_HOOK=off · remove: uninstall-hook.`);
+    ? `Removed project-memory ${what} hook from ${settingsPath}.`
+    : `Installed project-memory ${what} hook in ${settingsPath}:\n  ${command}\nON. Restart Claude Code. Per-session off: ${off} · remove: ${process.argv[2].replace("install", "uninstall")}.`);
   process.exit(0);
 }
 
@@ -190,7 +244,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After the user corrects how you work, or states a durable preference (code style, workflow habit, a "from now on" rule), call remember_preference — scope "global" for a cross-project habit, "project" for one project. Preferences ride the auto-loaded AGENTS.md, so they come back next session and turn a one-time correction into a remembered pattern.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.4.1" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.5.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 

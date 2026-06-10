@@ -50,9 +50,12 @@ decisions, and every bug/issue faced during development.
 - **Release:** bump `version` in BOTH `package.json` and the `McpServer({version})` string
   in `index.js`, commit, `npm publish`. `npx -y` users auto-get the latest (unpinned).
 - **Subcommands** (gated on `argv[2]`, all short-circuit before `server.connect`): `install`
-  (register MCP server), `install-hook` / `uninstall-hook` (opt-in Stop hook in
-  `~/.claude/settings.json`), `hook` (the Stop-hook entrypoint — reads the Stop payload on
-  stdin via `fs.readFileSync(0)`, decides allow vs. block).
+  (register MCP server), `install-hook` / `uninstall-hook` (opt-in Stop hook = guaranteed
+  capture), `hook` (Stop-hook entrypoint — reads the Stop payload on stdin via
+  `fs.readFileSync(0)`, decides allow vs. block), `install-recall` / `uninstall-recall` (opt-in
+  UserPromptSubmit hook = auto-recall), `recall` (UserPromptSubmit entrypoint — keyword-matches
+  the prompt against memory and injects hits via `hookSpecificOutput.additionalContext`). The two
+  installers share one generalized block keyed on the event (Stop vs UserPromptSubmit).
 
 ## Decisions
 - 2026-06-04: Store content in `AGENTS.md` with a one-line `CLAUDE.md` (`@AGENTS.md`) stub — AGENTS.md is the cross-tool standard (Cursor/Codex read it), CLAUDE.md bridges it for Claude Code.
@@ -81,10 +84,13 @@ decisions, and every bug/issue faced during development.
 - 2026-06-05: **Subcommands must read stdin SYNCHRONOUSLY** (`fs.readFileSync(0)`), not via async `process.stdin` handlers. The whole file runs top-to-bottom to `await server.connect(...)`; an async stdin handler returns immediately and the code falls through to ALSO start the MCP server. Synchronous read blocks until EOF, then `process.exit(0)` — no fall-through. (Affects the `hook` subcommand.)
 - 2026-06-05 (found by dogfooding, fixed in 1.3.1): **`appendUnderHeading` matched headings with an exact-line regex** (`^## Learnings$`), so a heading with trailing text like `## Learnings (gotchas …)` wasn't found and a DUPLICATE `## Learnings` section got appended at EOF. Fixed to match the heading's leading word (`^##\s+Learnings\b`). Lesson: section headings in the wild carry parentheticals — match by prefix, not whole line.
 - 2026-06-05 (found by dogfooding, fixed in 1.3.1): **Stop hook only counted `mcp__project-memory__*` calls as capture**, so editing AGENTS.md/issues.jsonl directly (this repo's normal path) still tripped the nag. Fixed: an Edit/Write to a file ending in AGENTS.md or issues.jsonl now counts as captured.
+- 2026-06-10 (v1.5.0): Auto-recall is a `UserPromptSubmit` hook (`recall` subcommand), NOT an MCP tool — it has to fire on every prompt and inject context, which only a hook can do. Verified the contract first: inject via `{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext}}` on exit 0 (plain stdout also works, but the JSON form is explicit); exit 2 would REJECT/erase the prompt, so we never use it. Kept OPT-IN like the Stop hook (per-prompt cost) and silent-by-default. Noise control without embeddings: a stopword set drops generic dev filler ("error/fix/bug/code") so single common words don't fire it; cross-project hits need ≥2 keyword matches, current-project ≥1; cap 4 lines. This is the keyword (zero-dep) half of the long-deferred relevance-triggered recall; semantic/embeddings remains the future lever.
+- 2026-06-10 (v1.5.0): Generalized the hook installer into ONE block keyed on event/sub (Stop↔`hook`, UserPromptSubmit↔`recall`) instead of duplicating. `isOurs` matches per-sub (`project-memory.*${sub}\b|index\.js" ${sub}\b`) so `uninstall-recall` removes only the UserPromptSubmit entry and `uninstall-hook` only the Stop entry — they coexist and don't clobber each other (verified). Recall timeout 10s (it runs on every prompt; must not stall input), Stop stays 30s.
 - 2026-06-10: **Official MCP Registry publishing** (now listed as `io.github.kaaustubh/project-memory-mcp`): flow is (1) add `mcpName` to package.json matching the `io.github.<user>/...` namespace + `name` in `server.json`, (2) `npm publish` FIRST (registry only stores metadata and validates the npm package carries `mcpName`), (3) `brew install mcp-publisher` → `mcp-publisher login github` (device code) → `mcp-publisher publish`. `server.json` is repo-only (kept OUT of the `files` whitelist so it doesn't bloat the npm tarball). Gotcha: `server.json` **`description` must be ≤ 100 chars** or publish 422s (`expected length <= 100`) — npm's description can be longer, the registry's can't. Fixing only server.json metadata needs NO npm republish — just re-run `mcp-publisher publish`.
 
 ## Known sharp edges (candidates for future work)
-- `search_issues` field-scoping landed in v1.2.0 (no more JSON-key false hits); semantic/embeddings search is still the deferred bigger lever if logs grow.
+- `search_issues` field-scoping landed in v1.2.0 (no more JSON-key false hits); semantic/embeddings search is still the deferred bigger lever if logs grow. The v1.5.0 auto-recall hook is keyword-only too — fine at personal scale, but big issue logs will eventually want embeddings for precision/perf (it re-reads all projects' files on every prompt).
+- Auto-recall inherits the self-exclusion: working IN `.memory-server`, `listProjectDirs()` skips it, so the hook surfaces only OTHER projects' memory, never this repo's own.
 - Issue IDs are `lineCount+1` — can collide if a line is deleted or on concurrent writes.
 - `resolve_issue` rewrites the whole file (only non-append op).
 - No delete tool by design (append-only history); prune via manual file edit.
