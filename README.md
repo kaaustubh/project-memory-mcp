@@ -210,7 +210,7 @@ manual case is two people editing the *same prose line* the same day. Config: `P
 
 Team sync is in early validation and I'm looking for a few people (or small teams) to try it
 on real work. If you'd share memory across machines/teammates and tell me whether it actually
-helps, **[nominate yourself in the pinned "Beta: team sync" issue](https://github.com/kaaustubh/project-memory-mcp/issues)**
+helps, **[nominate yourself in the pinned "Beta: team sync" issue](https://github.com/kaaustubh/project-memory-mcp/issues/1)**
 — a one-line comment about your setup (team size, editors, what you'd share) is all it takes.
 
 ## New-project scaffold
