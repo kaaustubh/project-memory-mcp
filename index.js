@@ -129,6 +129,50 @@ function memoryItems(project) {
   return items;
 }
 
+// --- team sync (OPT-IN, git-backed) --------------------------------------------------
+// The `sync` subcommand mirrors the memory files (each <project>/AGENTS.md + issues.jsonl,
+// plus the root AGENTS.md) into a hidden git repo and pushes/pulls them against a shared
+// private remote (PROJECT_MEMORY_SYNC_REMOTE), so a TEAM pools one memory. Local files stay
+// the source of truth; the mirror is just transport. Merge = git's built-in `union` driver
+// (append-only files concatenate cleanly on both sides) followed by a dedup pass — union's
+// only flaw is keeping BOTH copies of a line that changed on both sides, which dedup removes.
+const SYNC_DIR = process.env.PROJECT_MEMORY_SYNC_DIR
+  ? path.resolve(process.env.PROJECT_MEMORY_SYNC_DIR)
+  : path.join(process.env.HOME || ".", ".project-memory-sync");
+function git(args, cwd, opts = {}) { return spawnSync("git", args, { cwd, encoding: "utf8", ...opts }); }
+function copyIfExists(src, dst) {
+  if (!fs.existsSync(src)) return false;
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  fs.copyFileSync(src, dst);
+  return true;
+}
+// Keep the LAST record per issue id (so a resolve_issue mutation wins over the open row),
+// preserving first-seen order. Non-JSON / id-less lines pass through.
+function dedupIssuesFile(file) {
+  if (!fs.existsSync(file)) return;
+  const order = [], byId = new Map(), raw = [];
+  for (const l of fs.readFileSync(file, "utf8").split("\n").filter(Boolean)) {
+    let e; try { e = JSON.parse(l); } catch { raw.push(l); continue; }
+    if (!e.id) { raw.push(l); continue; }
+    if (!byId.has(e.id)) order.push(e.id);
+    byId.set(e.id, e);
+  }
+  fs.writeFileSync(file, order.map((id) => JSON.stringify(byId.get(id))).concat(raw).join("\n") + "\n");
+}
+// Drop exact-duplicate LIST/TABLE lines (what union double-keeps); never touch prose/headings.
+function dedupAgentsFile(file) {
+  if (!fs.existsSync(file)) return;
+  const seen = new Set(), out = [];
+  for (const l of fs.readFileSync(file, "utf8").split("\n")) {
+    const t = l.trimStart();
+    const dedupable = t.startsWith("- ") || t.startsWith("|");
+    if (dedupable && seen.has(l)) continue;
+    if (dedupable) seen.add(l);
+    out.push(l);
+  }
+  fs.writeFileSync(file, out.join("\n"));
+}
+
 // `npx @kaaustubh/project-memory-mcp install` registers this server with Claude Code +
 // Cursor, using the CURRENT directory as the projects root. Run it from your code folder.
 const PKG = "@kaaustubh/project-memory-mcp";
@@ -302,6 +346,82 @@ if (process.argv[2] === "reindex") {
   process.exit(0);
 }
 
+// `... sync` — OPT-IN team sync over a shared private git repo (PROJECT_MEMORY_SYNC_REMOTE).
+// Pushes local memory, pulls teammates', union-merges + dedups, then writes the merged result
+// back to the LIVE files — so recall/search surface the whole team's memory with no other change.
+// Safe to re-run (idempotent) and to wire to a cron / post-commit hook.
+if (process.argv[2] === "sync") {
+  const remote = process.env.PROJECT_MEMORY_SYNC_REMOTE;
+  if (!remote) {
+    console.error("Set PROJECT_MEMORY_SYNC_REMOTE to a git URL the team shares (a PRIVATE repo), e.g.\n  export PROJECT_MEMORY_SYNC_REMOTE=git@github.com:you/team-memory.git");
+    process.exit(1);
+  }
+  const host = (process.env.HOSTNAME || spawnSync("hostname", { encoding: "utf8" }).stdout || "machine").trim();
+  const branch = "main";
+
+  // 1. Ensure the mirror repo exists (clone the remote; an empty remote clones fine too).
+  if (!fs.existsSync(path.join(SYNC_DIR, ".git"))) {
+    if (fs.existsSync(SYNC_DIR)) { console.error(`${SYNC_DIR} exists but isn't a git repo — move or remove it, then re-run.`); process.exit(1); }
+    const c = git(["clone", remote, SYNC_DIR], process.env.HOME || ".", { stdio: "inherit" });
+    if (c.status !== 0) { console.error("git clone failed — check the remote URL and your access."); process.exit(1); }
+  }
+  git(["checkout", "-B", branch], SYNC_DIR);
+
+  // 2. Union merge driver (must be committed for rebase to actually use it).
+  const attrs = path.join(SYNC_DIR, ".gitattributes");
+  const attrsBody = "issues.jsonl merge=union\nAGENTS.md merge=union\n";
+  if (!fs.existsSync(attrs) || fs.readFileSync(attrs, "utf8") !== attrsBody) fs.writeFileSync(attrs, attrsBody);
+
+  // 3. Copy live memory → mirror (only the files we own; teammates' dirs in the mirror are left be).
+  copyIfExists(rootAgentsPath(), path.join(SYNC_DIR, "AGENTS.md"));
+  for (const p of listProjectDirs()) {
+    copyIfExists(agentsPath(p), path.join(SYNC_DIR, p, "AGENTS.md"));
+    copyIfExists(issuesPath(p), path.join(SYNC_DIR, p, "issues.jsonl"));
+  }
+
+  // 4. Commit local state (a no-op commit just fails quietly; we don't gate on it).
+  git(["add", "-A"], SYNC_DIR);
+  git(["commit", "-m", `sync from ${host} ${new Date().toISOString()}`], SYNC_DIR);
+
+  // 5. Pull + union-merge teammates' memory. The very first push has no remote branch yet — tolerate that.
+  const pull = git(["pull", "--rebase", "--autostash", "origin", branch], SYNC_DIR);
+  if (pull.status !== 0 && !/couldn'?t find remote ref|no such ref|unknown revision|does not appear to be a git/i.test((pull.stderr || "") + (pull.stdout || ""))) {
+    console.error("git pull --rebase hit a conflict it couldn't auto-resolve:\n" + (pull.stderr || pull.stdout || ""));
+    console.error(`Resolve it by hand in ${SYNC_DIR}, then re-run sync.`);
+    process.exit(1);
+  }
+
+  // 6. Dedup whatever union double-kept, across every file in the mirror.
+  dedupAgentsFile(path.join(SYNC_DIR, "AGENTS.md"));
+  for (const d of fs.readdirSync(SYNC_DIR, { withFileTypes: true })) {
+    if (!d.isDirectory() || d.name === ".git") continue;
+    dedupAgentsFile(path.join(SYNC_DIR, d.name, "AGENTS.md"));
+    dedupIssuesFile(path.join(SYNC_DIR, d.name, "issues.jsonl"));
+  }
+  git(["add", "-A"], SYNC_DIR);
+  git(["commit", "-m", `dedup after merge (${host})`], SYNC_DIR);
+
+  // 7. Push.
+  const push = git(["push", "-u", "origin", branch], SYNC_DIR);
+  if (push.status !== 0) { console.error("git push failed:\n" + (push.stderr || push.stdout || "")); process.exit(1); }
+
+  // 8. Write the merged result back to the LIVE files (creating dirs for teammates' projects,
+  //    so their memory is discoverable by listProjectDirs and surfaces in recall/search).
+  const created = [];
+  for (const d of fs.readdirSync(SYNC_DIR, { withFileTypes: true })) {
+    if (!d.isDirectory() || d.name === ".git") continue;
+    if (!fs.existsSync(path.join(SYNC_DIR, d.name, "AGENTS.md"))) continue;
+    if (!fs.existsSync(agentsPath(d.name))) created.push(d.name);
+    copyIfExists(path.join(SYNC_DIR, d.name, "AGENTS.md"), agentsPath(d.name));
+    copyIfExists(path.join(SYNC_DIR, d.name, "issues.jsonl"), issuesPath(d.name));
+  }
+  copyIfExists(path.join(SYNC_DIR, "AGENTS.md"), rootAgentsPath());
+
+  console.log(`Synced memory with ${remote}.`);
+  if (created.length) console.log(`Pulled in NEW project memory (created locally): ${created.join(", ")}`);
+  process.exit(0);
+}
+
 // `... install-hook|uninstall-hook` (Stop = guaranteed-capture) and
 // `... install-recall|uninstall-recall` (UserPromptSubmit = auto-recall) — register/remove the
 // respective hook in ~/.claude/settings.json. Both OPT-IN: plain `install` adds NEITHER.
@@ -431,7 +551,9 @@ server.registerTool("log_issue",
   async ({ project, symptom, cause, fix, status, files, tags }) => {
     if (!projectExists(project)) return err(`No AGENTS.md for "${project}". Create the project memory first.`);
     const entries = readIssues(project);
-    const id = `${project}-${String(entries.length + 1).padStart(3, "0")}`;
+    // Globally-unique id (random suffix, not line-count) so two machines logging concurrently
+    // never mint the same id — required for team sync to merge issues without collisions.
+    const id = `${project}-${crypto.randomBytes(3).toString("hex")}`;
     const entry = { id, date: today(), status: status || (fix ? "resolved" : "open"), symptom };
     if (cause) entry.cause = cause;
     if (fix) { entry.fix = fix; if (entry.status === "resolved") entry.resolvedDate = today(); }

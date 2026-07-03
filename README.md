@@ -185,6 +185,27 @@ The **tool** and your **memory content** sync separately:
 
 > `issues.jsonl` holds real bug details — only commit it into **private** repos.
 
+### Team sync (experimental)
+
+The above shares memory *per repo*. To pool **one memory across a team** — so a teammate's
+logged fix or decision shows up in *your* agent's recall — point everyone at one shared
+**private** git repo and run `sync`:
+
+```bash
+export PROJECT_MEMORY_SYNC_REMOTE=git@github.com:you/team-memory.git
+npx -y @kaaustubh/project-memory-mcp sync    # run on a cron or a post-commit hook
+```
+
+Each `sync` mirrors your `AGENTS.md` + `issues.jsonl` files into a hidden repo, pushes them,
+pulls teammates', **union-merges** the appends (issues + decisions/learnings/preferences) and
+writes the merged result back to your live files — so recall/search then see the whole team's
+memory with no other change. Merge is git's built-in `union` driver plus a dedup pass; the only
+manual case is two people editing the *same prose line* the same day. Config: `PROJECT_MEMORY_SYNC_REMOTE`
+(required) and `PROJECT_MEMORY_SYNC_DIR` (optional mirror location, default `~/.project-memory-sync`).
+
+> Experimental — validates whether shared team memory earns a hosted service. The mirror is
+> pure git: no accounts, no backend. Only ever point it at a **private** repo.
+
 ## New-project scaffold
 
 For a new project under the root, create `<project>/CLAUDE.md` containing `@AGENTS.md`
