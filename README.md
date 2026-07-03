@@ -18,6 +18,23 @@ It is **stateless**: every tool reads/writes plain files on disk, so multiple cl
 history (bugs) goes in `issues.jsonl` (queried via `search_issues`). This keeps the
 always-loaded context small while keeping everything searchable.
 
+### Works even where MCP is locked down
+
+Some orgs disable third-party MCP servers via policy (e.g. GitHub Copilot's
+[MCP allowlist enforcement](https://docs.github.com/en/copilot/reference/mcp-allowlist-enforcement)).
+Because the memory is **plain files, not a service**, most of the value survives that:
+
+- **The memory itself is just files.** `AGENTS.md` is auto-loaded by the editor reading it —
+  no MCP call involved — so decisions/learnings/preferences still land in context.
+- **Team sync is just git.** The [`sync`](#team-sync-experimental) command is a shell CLI, not
+  an MCP tool — it works in the most locked-down environment, because to git it's only a repo.
+- **The policy is Copilot-scoped and per-client.** It doesn't affect the same server in
+  Claude Code or Cursor, and orgs running *allowlist / registry-only* mode can permit it —
+  this server is published to the official MCP Registry (`io.github.kaaustubh/project-memory-mcp`).
+
+Only the interactive **tools** (`log_issue`, `search_issues`, …) require the MCP channel; the
+file-based memory and git sync keep working without it.
+
 ## Tools
 
 - `list_projects`, `get_project`, `search_memory` — read project memory
