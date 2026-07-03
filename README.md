@@ -206,6 +206,13 @@ manual case is two people editing the *same prose line* the same day. Config: `P
 > Experimental — validates whether shared team memory earns a hosted service. The mirror is
 > pure git: no accounts, no backend. Only ever point it at a **private** repo.
 
+#### 🧪 Beta testers wanted
+
+Team sync is in early validation and I'm looking for a few people (or small teams) to try it
+on real work. If you'd share memory across machines/teammates and tell me whether it actually
+helps, **[nominate yourself in the pinned "Beta: team sync" issue](https://github.com/kaaustubh/project-memory-mcp/issues)**
+— a one-line comment about your setup (team size, editors, what you'd share) is all it takes.
+
 ## New-project scaffold
 
 For a new project under the root, create `<project>/CLAUDE.md` containing `@AGENTS.md`
