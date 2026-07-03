@@ -18,6 +18,22 @@ It is **stateless**: every tool reads/writes plain files on disk, so multiple cl
 history (bugs) goes in `issues.jsonl` (queried via `search_issues`). This keeps the
 always-loaded context small while keeping everything searchable.
 
+### Works even where MCP is locked down
+
+Some orgs disable third-party MCP servers via policy (e.g. GitHub Copilot's
+[MCP allowlist enforcement](https://docs.github.com/en/copilot/reference/mcp-allowlist-enforcement)).
+Because the memory is **plain files, not a service**, the core value survives that:
+
+- **The memory itself is just files.** `AGENTS.md` is auto-loaded by the editor reading it —
+  no MCP call involved — so a project's identity, decisions, learnings, and preferences still
+  land in the agent's context.
+- **The policy is Copilot-scoped and per-client.** It doesn't affect the same server in
+  Claude Code or Cursor, and orgs running *allowlist / registry-only* mode can permit it —
+  this server is published to the official MCP Registry (`io.github.kaaustubh/project-memory-mcp`).
+
+Only the interactive **tools** (`log_issue`, `search_issues`, …) go over the MCP channel; the
+file-based memory keeps working without it.
+
 ## Tools
 
 - `list_projects`, `get_project`, `search_memory` — read project memory
@@ -192,6 +208,11 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.6.1
+- **Docs:** added "Works even where MCP is locked down" — clarifies that the file-based memory
+  (`AGENTS.md` auto-load) keeps working even where an org disables third-party MCP servers
+  (e.g. GitHub Copilot's MCP allowlist), since only the interactive tools use the MCP channel.
 
 ### v1.6.0
 - **Semantic recall (optional local embeddings).** The recall hook now matches your prompt
