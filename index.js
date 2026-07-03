@@ -11,6 +11,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
@@ -72,6 +73,60 @@ function readIssues(project) {
 }
 function writeIssues(project, entries) {
   fs.writeFileSync(issuesPath(project), entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
+}
+
+// --- semantic embeddings (OPTIONAL, offline after first model fetch) -----------------
+// The recall hook and `reindex` use these to match a prompt against memory by MEANING,
+// not shared substrings. Everything is soft: if @xenova/transformers isn't installed (or
+// fails to load), getEmbedder() returns null and callers fall back to keyword scoring.
+// Vectors are cached per project in <project>/.embeddings.json (a DERIVED cache — the
+// .jsonl / AGENTS.md stay the source of truth; delete the cache and it rebuilds), keyed by
+// a hash of the item text so edited/removed lines self-invalidate.
+const EMBED_MODEL = "Xenova/all-MiniLM-L6-v2";
+let _embedder = null, _embedderTried = false;
+async function getEmbedder() {
+  if (_embedderTried) return _embedder;
+  _embedderTried = true;
+  try {
+    const { pipeline } = await import("@xenova/transformers");
+    _embedder = await pipeline("feature-extraction", EMBED_MODEL);
+  } catch { _embedder = null; }
+  return _embedder;
+}
+async function embed(str) {
+  const e = await getEmbedder();
+  if (!e) return null;
+  const out = await e(str, { pooling: "mean", normalize: true }); // unit vector → dot == cosine
+  return Array.from(out.data);
+}
+function cosine(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+function hashText(t) { return crypto.createHash("sha256").update(t).digest("hex").slice(0, 16); }
+function embCachePath(project) { return path.join(ROOT, project, ".embeddings.json"); }
+function readEmbCache(project) {
+  const f = embCachePath(project);
+  if (!fs.existsSync(f)) return {};
+  try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return {}; }
+}
+function writeEmbCache(project, cache) { fs.writeFileSync(embCachePath(project), JSON.stringify(cache)); }
+
+// Collect the embeddable / scorable memory items for a project: every issue plus every
+// decision/learning/preference bullet. `body` is what we match against; `text` is what we
+// show. Shared by the recall hook and `reindex` so the two never drift.
+function memoryItems(project) {
+  const items = [];
+  for (const e of readIssues(project)) {
+    const body = [e.id, e.symptom, e.cause, e.fix, ...(e.tags || [])].filter(Boolean).join(" ");
+    items.push({ kind: "issue", body, text: `[${e.id}] (${e.status}) ${e.symptom}${e.fix ? ` — fix: ${e.fix}` : ""}` });
+  }
+  let section = null;
+  for (const l of fs.readFileSync(agentsPath(project), "utf8").split("\n")) {
+    const h = l.match(/^##\s+(.+?)\s*$/);
+    if (h) { section = (h[1].split(/\s/)[0] || "").toLowerCase(); continue; }
+    if (/^(decisions|learnings|preferences)$/.test(section || "") && l.trim().startsWith("- ")) {
+      items.push({ kind: section.replace(/s$/, ""), body: l.trim(), text: l.trim().replace(/^-\s*/, "") });
+    }
+  }
+  return items;
 }
 
 // `npx @kaaustubh/project-memory-mcp install` registers this server with Claude Code +
@@ -165,35 +220,51 @@ if (process.argv[2] === "recall") {
   if (process.env.PROJECT_MEMORY_RECALL === "off") process.exit(0);
   let data = {};
   try { data = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(0); }
-  const prompt = (data.prompt || "").toLowerCase();
+  const prompt = (data.prompt || "").trim();
   if (!prompt) process.exit(0);
-
-  // Generic English + dev-filler words carry no discriminating signal (nearly every issue
-  // contains "error"/"fix"/"code"), so drop them — only domain words remain as keywords.
-  const STOP = new Set("the and for with this that from have what when where which your you are was can has not but get set use why how who will into out off should would could please help need want make made does did done file files code line lines error errors issue issues bug bugs fix fixes fixed run running test tests function add added new using used work works working change changes about there their then them they here have just like more some only also into your".split(/\s+/));
-  const words = [...new Set(prompt.match(/[a-z0-9_]{4,}/g) || [])].filter((w) => !STOP.has(w));
-  if (!words.length) process.exit(0);
 
   // Which project are we in? (cwd inside ROOT/<project>) — current-project hits rank higher.
   let current = null;
   try { const rel = path.relative(ROOT, data.cwd || ""); if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) current = rel.split(path.sep)[0]; } catch {}
 
-  const score = (hay) => { const h = hay.toLowerCase(); let s = 0; for (const w of words) if (h.includes(w)) s++; return s; };
-  const keep = (s, p) => s >= 2 || (s >= 1 && p === current); // cross-project needs 2 keyword hits; current project 1
-  const hits = [];
-  for (const p of listProjectDirs()) {
-    for (const e of readIssues(p)) {
-      const s = score([e.id, e.symptom, e.cause, e.fix, ...(e.tags || [])].filter(Boolean).join(" "));
-      if (keep(s, p)) hits.push({ kind: "issue", project: p, score: s + (p === current ? 1 : 0), text: `[${e.id}] (${e.status}) ${e.symptom}${e.fix ? ` — fix: ${e.fix}` : ""}` });
+  // All candidate memory items across projects (issue + decision/learning/preference bullets).
+  const items = [];
+  for (const p of listProjectDirs()) for (const it of memoryItems(p)) items.push({ ...it, project: p });
+  if (!items.length) process.exit(0);
+
+  const emb = await getEmbedder();
+  let hits = [];
+  if (emb) {
+    // SEMANTIC path — cosine similarity between the prompt and each item, so paraphrases
+    // match ("build broke" ↔ "compile failure") even with no shared words. Vectors come from
+    // the per-project cache; only cache misses (new/edited items) are embedded, then persisted.
+    const qv = await embed(prompt);
+    const caches = {}, dirty = {};
+    for (const it of items) {
+      const c = caches[it.project] ||= readEmbCache(it.project);
+      const key = hashText(it.body);
+      if (!c[key]) { c[key] = await embed(it.body); dirty[it.project] = true; }
+      it.vec = c[key];
     }
-    let section = null;
-    for (const l of fs.readFileSync(agentsPath(p), "utf8").split("\n")) {
-      const h = l.match(/^##\s+(.+?)\s*$/);
-      if (h) { section = (h[1].split(/\s/)[0] || "").toLowerCase(); continue; }
-      if (/^(decisions|learnings|preferences)$/.test(section || "") && l.trim().startsWith("- ")) {
-        const s = score(l);
-        if (keep(s, p)) hits.push({ kind: section.replace(/s$/, ""), project: p, score: s + (p === current ? 1 : 0), text: l.trim().replace(/^-\s*/, "") });
-      }
+    for (const p in dirty) writeEmbCache(p, caches[p]);
+    for (const it of items) {
+      if (!it.vec) continue;
+      const s = cosine(qv, it.vec);
+      const thr = it.project === current ? 0.25 : 0.35; // current project surfaces on weaker matches
+      if (s >= thr) hits.push({ ...it, score: s + (it.project === current ? 0.05 : 0) });
+    }
+  } else {
+    // KEYWORD fallback (no embeddings model available) — literal substring hits. Generic
+    // English + dev-filler words carry no signal (nearly every issue has "error"/"fix"/"code"),
+    // so drop them; here the stopword set stands in for a similarity threshold.
+    const STOP = new Set("the and for with this that from have what when where which your you are was can has not but get set use why how who will into out off should would could please help need want make made does did done file files code line lines error errors issue issues bug bugs fix fixes fixed run running test tests function add added new using used work works working change changes about there their then them they here have just like more some only also into your".split(/\s+/));
+    const words = [...new Set(prompt.toLowerCase().match(/[a-z0-9_]{4,}/g) || [])].filter((w) => !STOP.has(w));
+    if (!words.length) process.exit(0);
+    const score = (hay) => { const h = hay.toLowerCase(); let s = 0; for (const w of words) if (h.includes(w)) s++; return s; };
+    const keep = (s, p) => s >= 2 || (s >= 1 && p === current); // cross-project needs 2 keyword hits; current project 1
+    for (const it of items) {
+      const s = score(it.body);
+      if (keep(s, it.project)) hits.push({ ...it, score: s + (it.project === current ? 1 : 0) });
     }
   }
   if (!hits.length) process.exit(0);
@@ -201,6 +272,33 @@ if (process.argv[2] === "recall") {
   const top = hits.slice(0, 4).map((h) => `• ${h.kind === "issue" ? "" : h.kind + " "}${h.project !== current ? `(${h.project}) ` : ""}${h.text}`);
   const ctx = `🧠 project-memory — possibly relevant to this request (you may have solved or decided this before; call search_issues / find_by_file / get_project for full detail before re-solving):\n${top.join("\n")}`;
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: ctx } }) + "\n");
+  process.exit(0);
+}
+
+// `... reindex` — warm the semantic caches ahead of time so the first recall after new
+// memory isn't slow. Embeds every not-yet-cached item across all projects and persists the
+// vectors. No-op-ish if the embeddings model isn't installed (prints how to get it). Run it
+// after a big logging session, or once after enabling recall.
+if (process.argv[2] === "reindex") {
+  const emb = await getEmbedder();
+  if (!emb) {
+    console.error(`Semantic recall needs the embeddings model. Install it in this folder:\n  npm i @xenova/transformers\n(Recall still works without it via keyword fallback.)`);
+    process.exit(1);
+  }
+  let total = 0;
+  for (const p of listProjectDirs()) {
+    const cache = readEmbCache(p);
+    const items = memoryItems(p);
+    let added = 0;
+    for (const it of items) {
+      const key = hashText(it.body);
+      if (!cache[key]) { cache[key] = await embed(it.body); added++; }
+    }
+    if (added) writeEmbCache(p, cache);
+    total += added;
+    console.log(`  ${p}: +${added} vector(s) (${items.length} items).`);
+  }
+  console.log(`Reindexed ${total} new item(s) with ${EMBED_MODEL}.`);
   process.exit(0);
 }
 
@@ -244,7 +342,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After the user corrects how you work, or states a durable preference (code style, workflow habit, a "from now on" rule), call remember_preference — scope "global" for a cross-project habit, "project" for one project. Preferences ride the auto-loaded AGENTS.md, so they come back next session and turn a one-time correction into a remembered pattern.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.5.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.6.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 

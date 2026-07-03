@@ -144,7 +144,7 @@ npx -y @kaaustubh/project-memory-mcp uninstall-hook  # turn it off
 ## Automatic recall (opt-in UserPromptSubmit hook)
 
 Capture is only half the loop — the other half is *remembering to look*. The **recall hook**
-closes it: every time you submit a prompt, it keyword-matches your request against your issue
+closes it: every time you submit a prompt, it matches your request against your issue
 history and decisions/learnings/preferences, and silently injects the strongest hits as
 context. So a prior fix or decision surfaces **without you (or the agent) remembering to
 search** — the "have we hit this before?" habit becomes automatic.
@@ -154,12 +154,22 @@ npx -y @kaaustubh/project-memory-mcp install-recall    # turn it on (then restar
 npx -y @kaaustubh/project-memory-mcp uninstall-recall   # turn it off
 ```
 
-- **Silent unless relevant** — injects nothing for trivial prompts or when there's no match;
-  generic filler words ("fix", "error", "bug") are ignored so it doesn't fire on everything.
+- **Semantic matching (when available)** — if the optional embeddings model
+  (`@xenova/transformers`) is installed, recall matches by **meaning**, so *"the build is
+  broken"* still surfaces an issue logged as *"compile failure"* even with no shared words.
+  Runs fully offline (the model is fetched once, then cached). Without it, recall falls back
+  to keyword matching automatically — no configuration, nothing breaks.
+- **Silent unless relevant** — injects nothing for trivial prompts or when there's no match.
 - **Ranked & capped** — current-project hits rank highest; at most 4 lines are injected.
 - **Off by default** — like the Stop hook, it's opt-in (per-prompt cost). Plain `install` adds
   neither hook.
 - **Per-session kill switch** — set `PROJECT_MEMORY_RECALL=off` to disable without uninstalling.
+
+> **Warm the cache:** after a big logging session (or once, after enabling recall) run
+> `npx -y @kaaustubh/project-memory-mcp reindex` to pre-embed everything, so the first recall
+> isn't the one that pays for it. Vectors are cached per project in a derived
+> `.embeddings.json` (safe to delete / git-ignore — the `.jsonl` + `AGENTS.md` stay the
+> source of truth).
 
 > Pair it with the Stop hook and the loop runs itself: the Stop hook guarantees things get
 > *saved*, the recall hook guarantees they come *back* at the right moment.
@@ -182,6 +192,18 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.6.0
+- **Semantic recall (optional local embeddings).** The recall hook now matches your prompt
+  against memory by *meaning*, not shared substrings — *"the build is broken"* surfaces an
+  issue logged as *"compile failure"*. Powered by a local, offline embedding model
+  (`Xenova/all-MiniLM-L6-v2` via the optional `@xenova/transformers` dependency); vectors are
+  cached per project in a derived `.embeddings.json`, keyed by content hash so edited/removed
+  items self-invalidate. If the model isn't installed it **falls back to the previous keyword
+  matching automatically** — nothing to configure, nothing breaks. New `reindex` subcommand
+  pre-embeds all memory so the first recall isn't slow. This completes the long-deferred
+  "semantic retrieval" lever behind both recall and `search_issues`; keyword remains the
+  zero-dependency floor.
 
 ### v1.5.0
 - **Automatic recall (opt-in `UserPromptSubmit` hook).** New `install-recall` / `uninstall-recall`
