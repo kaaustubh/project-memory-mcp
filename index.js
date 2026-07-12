@@ -150,6 +150,7 @@ if (process.argv[2] === "install") {
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
   console.log(`\nRegistered project-memory (projects root: ${root}).`);
   console.log("Restart Claude Code / Cursor, then ask your agent to \"set up project memory for this folder\".");
+  console.log("\nWant team memory (shared across your team, not just your machine)? Register for the beta: https://github.com/kaaustubh/project-memory-mcp/issues/1");
   process.exit(0);
 }
 
@@ -342,7 +343,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After the user corrects how you work, or states a durable preference (code style, workflow habit, a "from now on" rule), call remember_preference — scope "global" for a cross-project habit, "project" for one project. Preferences ride the auto-loaded AGENTS.md, so they come back next session and turn a one-time correction into a remembered pattern.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.6.1" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.6.2" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 

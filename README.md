@@ -90,6 +90,9 @@ directory as your projects root. Restart those apps, then ask your agent
 > No clone, no global install — the MCP config just runs `npx`, which fetches and runs
 > the latest version on demand.
 
+> **Team memory (beta signup):** want this memory shared across your team instead of
+> just your machine? Register your interest: https://github.com/kaaustubh/project-memory-mcp/issues/1
+
 ### From source instead
 
 ```bash
@@ -208,6 +211,10 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.6.2
+- **Docs:** added a team-memory beta signup note (README install section + the `install`
+  subcommand's console output) — https://github.com/kaaustubh/project-memory-mcp/issues/1
 
 ### v1.6.1
 - **Docs:** added "Works even where MCP is locked down" — clarifies that the file-based memory
