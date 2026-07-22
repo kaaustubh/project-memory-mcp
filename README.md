@@ -1,7 +1,7 @@
 # project-memory MCP server
 
 A small, local [MCP](https://modelcontextprotocol.io) server that gives AI agents
-(Claude Code, Cursor, …) a shared, persistent memory of the projects in a code folder —
+(Claude Code, Cursor, VS Code / GitHub Copilot, …) a shared, persistent memory of the projects in a code folder —
 what each project is, decisions made, and **every bug/issue faced during development.**
 
 It is **stateless**: every tool reads/writes plain files on disk, so multiple clients
@@ -83,9 +83,13 @@ cd ~/code            # the folder that holds your projects
 npx -y @kaaustubh/project-memory-mcp install
 ```
 
-That registers the server with Claude Code (user scope) and Cursor, using the current
+That registers the server with Claude Code (user scope), Cursor, and VS Code / GitHub
+Copilot (user-profile `mcp.json`, so it applies to every workspace), using the current
 directory as your projects root. Restart those apps, then ask your agent
 *"set up project memory for this folder"* to scaffold `AGENTS.md` for each project.
+
+> **VS Code / Copilot:** tools only run in Copilot Chat's **Agent mode** (not Ask/Edit
+> mode) — pick it from the mode dropdown in the Chat view.
 
 > No clone, no global install — the MCP config just runs `npx`, which fetches and runs
 > the latest version on demand.
@@ -106,7 +110,7 @@ A common question: *"once I install it, does it just start doing things?"* Not q
 the server is **passive**. Here's the actual flow:
 
 1. **Restart your editor.** MCP servers are loaded at startup, so the server only
-   becomes available the next time you launch Claude Code / Cursor.
+   becomes available the next time you launch Claude Code / Cursor / VS Code.
 2. **Push layer (automatic, not the server):** when you open a project, the editor reads
    `AGENTS.md` (via `CLAUDE.md` → `@AGENTS.md`) into the model's context for you. This is
    why the agent "just knows" what your project is — it's a built-in editor feature.
@@ -211,6 +215,13 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.7.0
+- **Feature:** `install` now also registers the server with **VS Code / GitHub Copilot**
+  (user-profile `mcp.json`, so it applies to every workspace), alongside the existing
+  Claude Code and Cursor registration. Same merge-don't-clobber behavior as the Cursor
+  config. Note the schema differs (`servers` key, `type: "stdio"` per entry) and Copilot
+  tools only run in Chat's Agent mode.
 
 ### v1.6.2
 - **Docs:** added a team-memory beta signup note (README install section + the `install`

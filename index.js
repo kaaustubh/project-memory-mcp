@@ -148,8 +148,27 @@ if (process.argv[2] === "install") {
   cfg.mcpServers = cfg.mcpServers || {};
   cfg.mcpServers["project-memory"] = { command: "npx", args: ["-y", PKG], env: { PROJECT_MEMORY_ROOT: root } };
   fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+  // VS Code / GitHub Copilot (user-profile mcp.json, so it applies to every workspace;
+  // schema differs from Claude/Cursor: top-level key is "servers", entries need "type").
+  const vscodeDir = process.platform === "darwin"
+    ? path.join(process.env.HOME || ".", "Library", "Application Support", "Code", "User")
+    : process.platform === "win32"
+      ? path.join(process.env.APPDATA || "", "Code", "User")
+      : path.join(process.env.HOME || ".", ".config", "Code", "User");
+  const vscodeCfgPath = path.join(vscodeDir, "mcp.json");
+  try {
+    fs.mkdirSync(vscodeDir, { recursive: true });
+    let vsCfg = {};
+    try { vsCfg = JSON.parse(fs.readFileSync(vscodeCfgPath, "utf8")); } catch {}
+    vsCfg.servers = vsCfg.servers || {};
+    vsCfg.servers["project-memory"] = { type: "stdio", command: "npx", args: ["-y", PKG], env: { PROJECT_MEMORY_ROOT: root } };
+    fs.writeFileSync(vscodeCfgPath, JSON.stringify(vsCfg, null, 2) + "\n");
+  } catch (e) {
+    console.error("VS Code / Copilot registration skipped:", e.message);
+  }
   console.log(`\nRegistered project-memory (projects root: ${root}).`);
-  console.log("Restart Claude Code / Cursor, then ask your agent to \"set up project memory for this folder\".");
+  console.log("Restart Claude Code / Cursor / VS Code, then ask your agent to \"set up project memory for this folder\".");
+  console.log("(VS Code: tools only run in Copilot Chat's Agent mode.)");
   console.log("\nWant team memory (shared across your team, not just your machine)? Register for the beta: https://github.com/kaaustubh/project-memory-mcp/issues/1");
   process.exit(0);
 }
@@ -343,7 +362,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After the user corrects how you work, or states a durable preference (code style, workflow habit, a "from now on" rule), call remember_preference — scope "global" for a cross-project habit, "project" for one project. Preferences ride the auto-loaded AGENTS.md, so they come back next session and turn a one-time correction into a remembered pattern.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.6.2" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.7.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
