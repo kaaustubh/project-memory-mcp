@@ -229,16 +229,23 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 
 ## Changelog
 
+### v1.8.0
+- **Feature:** `install` now also registers **GitHub Copilot CLI** (`~/.copilot/mcp-config.json`,
+  or `$COPILOT_HOME`), the **JetBrains Copilot plugin** (IntelliJ/PyCharm/WebStorm/…), and
+  **Visual Studio** on Windows (global `.mcp.json`) — rounding out every Copilot surface
+  alongside the VS Code registration added in 1.7.0. Each target merges into its existing
+  config (other servers are preserved) and is independently best-effort, so a client that
+  isn't installed is silently skipped rather than failing the whole install. Schemas differ
+  per client (`mcpServers` vs `servers` top-level key; `type: "local"` for the Copilot CLI
+  vs `type: "stdio"` for the IDE-embedded ones) — verified against each client's current
+  docs before implementing. The merge logic for all five targets was consolidated into one
+  `registerMcp()` helper.
+
 ### v1.7.0
-- **Feature:** `install` now registers the server with every **GitHub Copilot** surface,
-  not just Claude Code and Cursor: **VS Code Copilot Chat** (user-profile `mcp.json`),
-  **GitHub Copilot CLI** (`~/.copilot/mcp-config.json`), the **JetBrains Copilot plugin**
-  (IntelliJ/PyCharm/WebStorm/…), and **Visual Studio** on Windows (global `.mcp.json`).
-  Each target merges into its existing config (other servers are preserved) and is
-  independently best-effort, so a client that isn't installed is silently skipped rather
-  than failing the whole install. Schemas differ per client (`mcpServers` vs `servers`
-  top-level key; `type: "local"` for the Copilot CLI vs `type: "stdio"` for the
-  IDE-embedded ones) — verified against each client's current docs before implementing.
+- **Feature:** `install` now also registers the server with **VS Code / GitHub Copilot**
+  (user-profile `mcp.json`, so it applies to every workspace), alongside the existing
+  Claude Code and Cursor registration. Schema differs from Claude/Cursor (`servers` key,
+  `type: "stdio"` per entry) and Copilot tools only run in Chat's Agent mode.
 
 ### v1.6.2
 - **Docs:** added a team-memory beta signup note (README install section + the `install`
