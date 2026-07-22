@@ -83,13 +83,26 @@ cd ~/code            # the folder that holds your projects
 npx -y @kaaustubh/project-memory-mcp install
 ```
 
-That registers the server with Claude Code (user scope), Cursor, and VS Code / GitHub
-Copilot (user-profile `mcp.json`, so it applies to every workspace), using the current
-directory as your projects root. Restart those apps, then ask your agent
-*"set up project memory for this folder"* to scaffold `AGENTS.md` for each project.
+That registers the server, using the current directory as your projects root, with every
+client that has an MCP config location on this machine:
 
-> **VS Code / Copilot:** tools only run in Copilot Chat's **Agent mode** (not Ask/Edit
-> mode) — pick it from the mode dropdown in the Chat view.
+| Client | Config written |
+|---|---|
+| Claude Code | user scope, via `claude mcp add` |
+| Cursor | `~/.cursor/mcp.json` |
+| VS Code / GitHub Copilot Chat | user-profile `mcp.json` (applies to every workspace) |
+| GitHub Copilot CLI | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME`) |
+| JetBrains Copilot plugin (IntelliJ, PyCharm, WebStorm, …) | `~/.config/github-copilot/intellij/mcp.json` |
+| Visual Studio (Windows) | `%USERPROFILE%\.mcp.json` — global, all solutions |
+
+Each write merges into the existing file (other MCP servers you've already configured are
+left alone) and is independently best-effort — a client that isn't installed on this
+machine is silently skipped, the rest still get registered. Restart whichever app(s) you
+use, then ask your agent *"set up project memory for this folder"* to scaffold `AGENTS.md`
+for each project.
+
+> **Copilot surfaces (VS Code, CLI, JetBrains, Visual Studio):** tools only run in
+> **Agent mode**, and config changes need a restart to take effect.
 
 > No clone, no global install — the MCP config just runs `npx`, which fetches and runs
 > the latest version on demand.
@@ -217,11 +230,15 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 ## Changelog
 
 ### v1.7.0
-- **Feature:** `install` now also registers the server with **VS Code / GitHub Copilot**
-  (user-profile `mcp.json`, so it applies to every workspace), alongside the existing
-  Claude Code and Cursor registration. Same merge-don't-clobber behavior as the Cursor
-  config. Note the schema differs (`servers` key, `type: "stdio"` per entry) and Copilot
-  tools only run in Chat's Agent mode.
+- **Feature:** `install` now registers the server with every **GitHub Copilot** surface,
+  not just Claude Code and Cursor: **VS Code Copilot Chat** (user-profile `mcp.json`),
+  **GitHub Copilot CLI** (`~/.copilot/mcp-config.json`), the **JetBrains Copilot plugin**
+  (IntelliJ/PyCharm/WebStorm/…), and **Visual Studio** on Windows (global `.mcp.json`).
+  Each target merges into its existing config (other servers are preserved) and is
+  independently best-effort, so a client that isn't installed is silently skipped rather
+  than failing the whole install. Schemas differ per client (`mcpServers` vs `servers`
+  top-level key; `type: "local"` for the Copilot CLI vs `type: "stdio"` for the
+  IDE-embedded ones) — verified against each client's current docs before implementing.
 
 ### v1.6.2
 - **Docs:** added a team-memory beta signup note (README install section + the `install`

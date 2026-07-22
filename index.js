@@ -132,43 +132,67 @@ function memoryItems(project) {
 // `npx @kaaustubh/project-memory-mcp install` registers this server with Claude Code +
 // Cursor, using the CURRENT directory as the projects root. Run it from your code folder.
 const PKG = "@kaaustubh/project-memory-mcp";
+// Merges a project-memory entry into a JSON config file under `topKey` (e.g. "mcpServers"
+// or "servers"), preserving whatever else is already there. Non-fatal: a client whose
+// config dir can't be created/written (e.g. not installed on this machine) just gets skipped.
+function registerMcp(cfgPath, topKey, entry, label) {
+  try {
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); } catch {}
+    cfg[topKey] = cfg[topKey] || {};
+    cfg[topKey]["project-memory"] = entry;
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
+  } catch (e) {
+    console.error(`${label} registration skipped:`, e.message);
+  }
+}
+
 if (process.argv[2] === "install") {
   const root = process.cwd();
+  const npxEntry = { command: "npx", args: ["-y", PKG], env: { PROJECT_MEMORY_ROOT: root } };
+
   // Claude Code (user scope = every project)
   spawnSync("claude", ["mcp", "remove", "project-memory", "-s", "user"], { stdio: "ignore" });
   const r = spawnSync("claude",
     ["mcp", "add", "project-memory", "-s", "user", "-e", `PROJECT_MEMORY_ROOT=${root}`, "--", "npx", "-y", PKG],
     { stdio: "inherit" });
   if (r.error) console.error("Claude Code registration skipped:", r.error.message);
-  // Cursor (merge so other MCP servers are preserved)
-  const cfgPath = path.join(process.env.HOME || ".", ".cursor", "mcp.json");
-  fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
-  let cfg = {};
-  try { cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8")); } catch {}
-  cfg.mcpServers = cfg.mcpServers || {};
-  cfg.mcpServers["project-memory"] = { command: "npx", args: ["-y", PKG], env: { PROJECT_MEMORY_ROOT: root } };
-  fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
-  // VS Code / GitHub Copilot (user-profile mcp.json, so it applies to every workspace;
-  // schema differs from Claude/Cursor: top-level key is "servers", entries need "type").
+
+  // Cursor — "mcpServers" schema, no "type" field.
+  registerMcp(path.join(process.env.HOME || ".", ".cursor", "mcp.json"), "mcpServers", npxEntry, "Cursor");
+
+  // GitHub Copilot CLI — "mcpServers" schema too, but each entry needs "type": "local"
+  // (COPILOT_HOME overrides the default ~/.copilot dir, same as the CLI itself respects).
+  const copilotCliDir = process.env.COPILOT_HOME || path.join(process.env.HOME || ".", ".copilot");
+  registerMcp(path.join(copilotCliDir, "mcp-config.json"), "mcpServers", { type: "local", ...npxEntry }, "GitHub Copilot CLI");
+
+  // VS Code / Copilot Chat — user-profile mcp.json applies to every workspace. Schema differs
+  // from Claude/Cursor: top-level key is "servers", entries need "type": "stdio".
   const vscodeDir = process.platform === "darwin"
     ? path.join(process.env.HOME || ".", "Library", "Application Support", "Code", "User")
     : process.platform === "win32"
       ? path.join(process.env.APPDATA || "", "Code", "User")
       : path.join(process.env.HOME || ".", ".config", "Code", "User");
-  const vscodeCfgPath = path.join(vscodeDir, "mcp.json");
-  try {
-    fs.mkdirSync(vscodeDir, { recursive: true });
-    let vsCfg = {};
-    try { vsCfg = JSON.parse(fs.readFileSync(vscodeCfgPath, "utf8")); } catch {}
-    vsCfg.servers = vsCfg.servers || {};
-    vsCfg.servers["project-memory"] = { type: "stdio", command: "npx", args: ["-y", PKG], env: { PROJECT_MEMORY_ROOT: root } };
-    fs.writeFileSync(vscodeCfgPath, JSON.stringify(vsCfg, null, 2) + "\n");
-  } catch (e) {
-    console.error("VS Code / Copilot registration skipped:", e.message);
+  registerMcp(path.join(vscodeDir, "mcp.json"), "servers", { type: "stdio", ...npxEntry }, "VS Code / Copilot");
+
+  // JetBrains Copilot plugin (IntelliJ, PyCharm, WebStorm, ...) — same "servers"/"type":"stdio"
+  // schema as VS Code, different config dir.
+  const jbDir = process.platform === "win32"
+    ? path.join(process.env.APPDATA || "", "github-copilot", "intellij")
+    : path.join(process.env.HOME || ".", ".config", "github-copilot", "intellij");
+  registerMcp(path.join(jbDir, "mcp.json"), "servers", { type: "stdio", ...npxEntry }, "JetBrains Copilot");
+
+  // Visual Studio (Windows-only IDE) — global config applies to every solution, same schema.
+  if (process.platform === "win32" && process.env.USERPROFILE) {
+    registerMcp(path.join(process.env.USERPROFILE, ".mcp.json"), "servers", { type: "stdio", ...npxEntry }, "Visual Studio");
   }
+
   console.log(`\nRegistered project-memory (projects root: ${root}).`);
-  console.log("Restart Claude Code / Cursor / VS Code, then ask your agent to \"set up project memory for this folder\".");
-  console.log("(VS Code: tools only run in Copilot Chat's Agent mode.)");
+  console.log("Restart your editor(s), then ask your agent to \"set up project memory for this folder\".");
+  console.log("Covers: Claude Code, Cursor, VS Code Copilot Chat, GitHub Copilot CLI, JetBrains Copilot plugin"
+    + (process.platform === "win32" ? ", and Visual Studio." : "."));
+  console.log("(Copilot surfaces: tools only run in Agent mode; restart required for config changes to load.)");
   console.log("\nWant team memory (shared across your team, not just your machine)? Register for the beta: https://github.com/kaaustubh/project-memory-mcp/issues/1");
   process.exit(0);
 }
