@@ -7,6 +7,8 @@ what each project is, decisions made, and **every bug/issue faced during develop
 It is **stateless**: every tool reads/writes plain files on disk, so multiple clients
 (and multiple machines) share one source of truth.
 
+[![kaaustubh/project-memory-mcp MCP server](https://glama.ai/mcp/servers/kaaustubh/project-memory-mcp/badges/score.svg)](https://glama.ai/mcp/servers/kaaustubh/project-memory-mcp)
+
 ## The model
 
 | Layer | Lives in | Auto-loaded into context? | For |
@@ -228,6 +230,12 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.8.1
+- **Docs:** Added the Glama quality-score badge to the README, per
+  [awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers)'s listing
+  requirement. Uses `/badges/score.svg` (a real SVG), not the plain `/badge` path — the
+  latter 200s but serves a 0-byte `image/png`, i.e. broken.
 
 ### v1.8.0
 - **Feature:** `install` now also registers **GitHub Copilot CLI** (`~/.copilot/mcp-config.json`,
