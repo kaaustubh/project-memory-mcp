@@ -208,6 +208,34 @@ function registerMcp(cfgPath, topKey, entry, label) {
   }
 }
 
+// OpenAI Codex CLI is the one client here that isn't JSON — config.toml with a
+// [mcp_servers.<name>] table per server. A text-based find-the-block/replace-or-append
+// merge (same spirit as appendBulletToFile's heading match) rather than a full TOML
+// parser/serializer dependency, since the entries we ever write are simple enough
+// (string command, string[] args, flat string env) not to need one.
+function toToml(entry) {
+  const argsStr = entry.args.map((a) => JSON.stringify(a)).join(", ");
+  const envLines = entry.env ? Object.entries(entry.env).map(([k, v]) => `env.${k} = ${JSON.stringify(v)}`) : [];
+  return [`command = ${JSON.stringify(entry.command)}`, `args = [${argsStr}]`, ...envLines].join("\n");
+}
+function registerMcpToml(cfgPath, name, entry, label) {
+  try {
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    let content = "";
+    try { content = fs.readFileSync(cfgPath, "utf8"); } catch {}
+    const block = `[mcp_servers.${name}]\n${toToml(entry)}\n`;
+    // Replace an existing [mcp_servers.<name>] table (up to the next line starting with
+    // "[" — i.e. the next table header — or EOF) in place; otherwise append a fresh block,
+    // preserving everything else. NOT "up to the next literal [" — a table body's own
+    // `args = [...]` array uses "[" too, so that naive version truncates mid-table.
+    const re = new RegExp(`^\\[mcp_servers\\.${name}\\][\\s\\S]*?(?=\\n\\[|(?![\\s\\S]))`, "m");
+    content = re.test(content) ? content.replace(re, block) : (content.trimEnd() + (content.trim() ? "\n\n" : "") + block);
+    fs.writeFileSync(cfgPath, content.endsWith("\n") ? content : content + "\n");
+  } catch (e) {
+    console.error(`${label} registration skipped:`, e.message);
+  }
+}
+
 if (process.argv[2] === "install") {
   const root = process.cwd();
   const npxEntry = { command: "npx", args: ["-y", PKG], env: { PROJECT_MEMORY_ROOT: root } };
@@ -221,6 +249,24 @@ if (process.argv[2] === "install") {
 
   // Cursor — "mcpServers" schema, no "type" field.
   registerMcp(path.join(process.env.HOME || ".", ".cursor", "mcp.json"), "mcpServers", npxEntry, "Cursor");
+
+  // Kimi Code CLI — same "mcpServers"/no-"type" schema as Cursor. Not to be confused with
+  // the separate "Kimi CLI" product (~/.kimi/mcp.json) — this is specifically Kimi Code CLI.
+  const kimiCodeDir = process.env.KIMI_CODE_HOME || path.join(process.env.HOME || ".", ".kimi-code");
+  registerMcp(path.join(kimiCodeDir, "mcp.json"), "mcpServers", npxEntry, "Kimi Code CLI");
+
+  // Gemini CLI — same "mcpServers"/no-"type" schema; settings.json also holds unrelated
+  // CLI settings, so registerMcp's merge-not-clobber behavior matters here.
+  registerMcp(path.join(process.env.HOME || ".", ".gemini", "settings.json"), "mcpServers", npxEntry, "Gemini CLI");
+
+  // Windsurf — same "mcpServers"/no-"type" schema, different config dir per OS.
+  const windsurfDir = process.platform === "win32"
+    ? path.join(process.env.USERPROFILE || "", ".codeium", "windsurf")
+    : path.join(process.env.HOME || ".", ".codeium", "windsurf");
+  registerMcp(path.join(windsurfDir, "mcp_config.json"), "mcpServers", npxEntry, "Windsurf");
+
+  // OpenAI Codex CLI — the one TOML client, see registerMcpToml above.
+  registerMcpToml(path.join(process.env.HOME || ".", ".codex", "config.toml"), "project-memory", npxEntry, "OpenAI Codex CLI");
 
   // GitHub Copilot CLI — "mcpServers" schema too, but each entry needs "type": "local"
   // (COPILOT_HOME overrides the default ~/.copilot dir, same as the CLI itself respects).
@@ -250,7 +296,8 @@ if (process.argv[2] === "install") {
 
   console.log(`\nRegistered project-memory (projects root: ${root}).`);
   console.log("Restart your editor(s), then ask your agent to \"set up project memory for this folder\".");
-  console.log("Covers: Claude Code, Cursor, VS Code Copilot Chat, GitHub Copilot CLI, JetBrains Copilot plugin"
+  console.log("Covers: Claude Code, Cursor, VS Code Copilot Chat, GitHub Copilot CLI, JetBrains Copilot plugin, "
+    + "Kimi Code CLI, Gemini CLI, OpenAI Codex CLI, Windsurf"
     + (process.platform === "win32" ? ", and Visual Studio." : "."));
   console.log("(Copilot surfaces: tools only run in Agent mode; restart required for config changes to load.)");
   console.log("\nWant team memory (shared across your team, not just your machine)? Register for the beta: https://github.com/kaaustubh/project-memory-mcp/issues/1");
@@ -447,7 +494,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - When the user names a multi-step effort with a codename (or says "track this as X" / "remember this under the name X"), call start_initiative so it's resumable by name from any future session — don't just track it in your own head or a session-local todo list. Call update_initiative proactively as todos complete or real progress happens, not just at session end. If the user references resuming past work WITHOUT an exact codename or project ("continue X", "where were we?"), call list_initiatives first instead of guessing.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.9.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.10.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 

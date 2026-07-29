@@ -97,6 +97,10 @@ client that has an MCP config location on this machine:
 | GitHub Copilot CLI | `~/.copilot/mcp-config.json` (or `$COPILOT_HOME`) |
 | JetBrains Copilot plugin (IntelliJ, PyCharm, WebStorm, …) | `~/.config/github-copilot/intellij/mcp.json` |
 | Visual Studio (Windows) | `%USERPROFILE%\.mcp.json` — global, all solutions |
+| Kimi Code CLI | `~/.kimi-code/mcp.json` (or `$KIMI_CODE_HOME`) |
+| Gemini CLI | `~/.gemini/settings.json` |
+| OpenAI Codex CLI | `~/.codex/config.toml` (the only non-JSON client — merged as TOML) |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
 
 Each write merges into the existing file (other MCP servers you've already configured are
 left alone) and is independently best-effort — a client that isn't installed on this
@@ -257,6 +261,22 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.10.0
+- **Feature:** `install` now also registers **Kimi Code CLI** (`~/.kimi-code/mcp.json`, or
+  `$KIMI_CODE_HOME` — not to be confused with the separate "Kimi CLI" product, which uses
+  `~/.kimi/mcp.json`), **Gemini CLI** (`~/.gemini/settings.json`), and **Windsurf**
+  (`~/.codeium/windsurf/mcp_config.json`) — all three match the existing `mcpServers`/no-
+  `type` schema `registerMcp` already handles for Cursor, so each was a one-line addition.
+  **OpenAI Codex CLI** (`~/.codex/config.toml`) needed real work: it's the first non-JSON
+  client, configured via TOML `[mcp_servers.<name>]` tables. Added `registerMcpToml`, a
+  text-based find-the-table/replace-or-append merge (same spirit as `appendBulletToFile`'s
+  heading match) rather than a TOML parser dependency — keeps the zero-hard-dependency
+  posture. Caught and fixed a real bug in it before shipping: the first version matched a
+  table's body as "everything up to the next literal `[`," which truncates mid-table
+  because `args = [...]` arrays use `[` too — fixed to match "up to the next line that
+  *starts* with `[`" instead, verified idempotent across repeated `install` runs against a
+  pre-seeded config.toml with an unrelated table.
 
 ### v1.9.0
 - **Feature: Initiatives.** Four new tools — `start_initiative`, `get_initiative`,
