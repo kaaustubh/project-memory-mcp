@@ -231,6 +231,14 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 
 ## Changelog
 
+### v1.8.3
+- **Infra:** Added a real CI workflow (`.github/workflows/ci.yml`, Node 18/20/22 matrix)
+  backed by a new stdio smoke test (`scripts/smoke-test.mjs` — spawns the server, does the
+  `initialize` → `tools/list` handshake, asserts all 12 tools register), plus a CodeQL
+  workflow. Both were previously entirely absent, which is why Glama's quality page showed
+  "CI status not available" and "No code scanning findings" — those weren't clean bills of
+  health, they meant "never measured."
+
 ### v1.8.2
 - **Docs/meta:** Added `glama.json` (declares `maintainers`) to fix Glama's "No glama.json"
   profile-completion check. Paired with cutting an actual **GitHub Release** for this
