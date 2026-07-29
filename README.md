@@ -231,6 +231,12 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 
 ## Changelog
 
+### v1.8.2
+- **Docs/meta:** Added `glama.json` (declares `maintainers`) to fix Glama's "No glama.json"
+  profile-completion check. Paired with cutting an actual **GitHub Release** for this
+  version (previously we only pushed git tags, which Glama's "Has a release" check doesn't
+  see — it reads the Releases API, not tags).
+
 ### v1.8.1
 - **Docs:** Added the Glama quality-score badge to the README, per
   [awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers)'s listing
