@@ -46,6 +46,7 @@ file-based memory keeps working without it.
 - `list_open_issues`, `resolve_issue` — track / close bugs
 - `sync_registry` — reconcile the root `AGENTS.md` projects table with what's on disk (adds rows for new projects, flags stale ones)
 - `find_by_file` — given a file path, surface the issues + decisions/learnings that touch it ("why is this code like this?")
+- `start_initiative`, `get_initiative`, `list_initiatives`, `update_initiative` — track a named, multi-session effort (a codename, a plan, an evolving todo list) so it's resumable from any future session by name, not just within the one that started it; see **Initiatives** below
 
 > You don't call these directly — you talk to your agent in natural language and it picks
 > the tool. See **Using it day to day** below for what to actually say.
@@ -212,6 +213,32 @@ npx -y @kaaustubh/project-memory-mcp uninstall-recall   # turn it off
 > Pair it with the Stop hook and the loop runs itself: the Stop hook guarantees things get
 > *saved*, the recall hook guarantees they come *back* at the right moment.
 
+## Initiatives (named, cross-session work tracking)
+
+Decisions/Learnings capture *finished* facts, and `issues.jsonl` captures bug history —
+neither has a home for a **named, in-flight, multi-session effort**: "give this a codename,
+track the plan and todos, and let me resume it by name even in a session that's never seen
+it before." That's what `start_initiative` / `get_initiative` / `list_initiatives` /
+`update_initiative` are for.
+
+```
+you: "Let's call this HashGate. Track the plan and todos under that name."
+  → start_initiative(project, codename: "HashGate", plan: "...", todos: [...])
+
+(new session, days later)
+you: "Where did we leave off on HashGate?"
+  → get_initiative(project, codename: "hash gate")   # case/spacing-insensitive match
+you: "Continue where I left off" (no codename given)
+  → list_initiatives(project)                        # or omit project to search everywhere
+```
+
+Each initiative lives in its own file, `<project>/initiatives/<slug>.md` — a plan, a
+checkbox todo list, and a dated progress log, all editable in place. A one-line pointer to
+every **active** initiative is kept in sync under `## Active Initiatives` in the project's
+`AGENTS.md`, so a brand-new session sees what's in flight in its auto-loaded context,
+with zero tool calls. Marking one `done` removes the pointer; the file itself stays as
+history, still reachable by name.
+
 ## Across machines
 
 The **tool** and your **memory content** sync separately:
@@ -230,6 +257,22 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.9.0
+- **Feature: Initiatives.** Four new tools — `start_initiative`, `get_initiative`,
+  `list_initiatives`, `update_initiative` — track a named, multi-session effort (a
+  codename, a plan, an evolving todo list) so it's resumable by name from ANY future
+  session, not just the one that started it. Motivated by a real failure mode reported
+  using another agent's session-local "codename" convention: no persistent registry
+  mapping name → session, todos scoped to one session's private store, and discovery
+  requiring an exact-string match across raw transcripts. Fixed here by storing one
+  markdown file per initiative (`<project>/initiatives/<slug>.md` — mutable, so todo
+  checkboxes toggle in place) plus a synced pointer under a new `## Active Initiatives`
+  heading in the project's auto-loaded `AGENTS.md`, so a brand-new session sees what's in
+  flight with zero tool calls. Codename matching is case/spacing-insensitive (`slugify`
+  splits camelCase boundaries first, so `"HashGate"` and `"hash gate"` resolve to the same
+  initiative). `list_initiatives` searches across all projects when none is given, so
+  "what was I working on?" doesn't require remembering which repo it was in either.
 
 ### v1.8.3
 - **Infra:** Added a real CI workflow (`.github/workflows/ci.yml`, Node 18/20/22 matrix)

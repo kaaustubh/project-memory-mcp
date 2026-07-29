@@ -75,6 +75,66 @@ function writeIssues(project, entries) {
   fs.writeFileSync(issuesPath(project), entries.map((e) => JSON.stringify(e)).join("\n") + "\n");
 }
 
+// --- initiatives (<project>/initiatives/<slug>.md) ------------------------------------
+// A NAMED, in-flight, multi-session effort: a plan plus an evolving todo list that should
+// survive closing the session and be resumable by codename from any client. Unlike
+// issues.jsonl (append-only structured records), an initiative is a single MUTABLE
+// document with checkboxes toggled in place and a status that changes over time, so it's
+// one markdown file per initiative rather than a shared JSONL. A pointer per active
+// initiative is kept in sync under "## Active Initiatives" in the project's AGENTS.md
+// (auto-loaded), so a brand-new session sees what's in flight with zero tool calls.
+function initiativesDir(project) { return path.join(ROOT, project, "initiatives"); }
+// Splits camelCase boundaries first ("HashGate" -> "Hash-Gate") so a bare camelCase
+// codename still slugifies the same way a space- or hyphen-separated form of it would —
+// otherwise "HashGate" -> "hashgate" wouldn't fuzzy-match a later "hash gate" lookup.
+function slugify(s) { return s.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }
+function initiativePath(project, slug) { return path.join(initiativesDir(project), `${slug}.md`); }
+function listInitiativeSlugs(project) {
+  const dir = initiativesDir(project);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3));
+}
+// Resolve a user-typed codename to an existing slug: exact slug match first, then a
+// forgiving substring fallback — so "hash gate" / "HashGate" / "hash-gate" all resolve
+// without the caller having to guess the exact stored form.
+function resolveInitiative(project, codename) {
+  const want = slugify(codename);
+  const slugs = listInitiativeSlugs(project);
+  if (slugs.includes(want)) return want;
+  return slugs.find((s) => s.includes(want) || want.includes(s)) || null;
+}
+function readInitiative(project, slug) { return fs.readFileSync(initiativePath(project, slug), "utf8"); }
+function writeInitiative(project, slug, body) {
+  fs.mkdirSync(initiativesDir(project), { recursive: true });
+  fs.writeFileSync(initiativePath(project, slug), body);
+}
+function initiativeMeta(body) {
+  const title = (body.match(/^#\s+(.+)$/m) || [, ""])[1].trim();
+  const status = (body.match(/^-\s*Status:\s*(\S+)/mi) || [, "?"])[1].trim();
+  const updated = (body.match(/^-\s*Updated:\s*(\S+)/mi) || [, "?"])[1].trim();
+  return { title, status, updated };
+}
+// Keep the AGENTS.md "## Active Initiatives" pointer in sync with one initiative: drop any
+// existing pointer line for this slug, then re-add it fresh unless the initiative is done
+// (a completed initiative's file stays under initiatives/ as history, just unpointed-to).
+function syncInitiativePointer(project, slug, title, status) {
+  const file = agentsPath(project);
+  const marker = `initiatives/${slug}.md`;
+  const filtered = fs.readFileSync(file, "utf8").split("\n").filter((l) => !l.includes(marker));
+  if (status === "done") { fs.writeFileSync(file, filtered.join("\n")); return; }
+  const bullet = `- **${title}** (${status}, updated ${today()}) — [initiatives/${slug}.md](initiatives/${slug}.md)`;
+  const idx = filtered.findIndex((l) => /^##\s+Active Initiatives\b/i.test(l));
+  if (idx === -1) {
+    let out = filtered.join("\n");
+    if (!out.endsWith("\n")) out += "\n";
+    out += `\n## Active Initiatives\n${bullet}\n`;
+    fs.writeFileSync(file, out);
+  } else {
+    filtered.splice(idx + 1, 0, bullet);
+    fs.writeFileSync(file, filtered.join("\n"));
+  }
+}
+
 // --- semantic embeddings (OPTIONAL, offline after first model fetch) -----------------
 // The recall hook and `reindex` use these to match a prompt against memory by MEANING,
 // not shared substrings. Everything is soft: if @xenova/transformers isn't installed (or
@@ -384,9 +444,10 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After a non-obvious or architectural decision, call append_decision.
 - After discovering a durable gotcha/workaround, call append_learning.
 - After the user corrects how you work, or states a durable preference (code style, workflow habit, a "from now on" rule), call remember_preference — scope "global" for a cross-project habit, "project" for one project. Preferences ride the auto-loaded AGENTS.md, so they come back next session and turn a one-time correction into a remembered pattern.
+- When the user names a multi-step effort with a codename (or says "track this as X" / "remember this under the name X"), call start_initiative so it's resumable by name from any future session — don't just track it in your own head or a session-local todo list. Call update_initiative proactively as todos complete or real progress happens, not just at session end. If the user references resuming past work WITHOUT an exact codename or project ("continue X", "where were we?"), call list_initiatives first instead of guessing.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.8.3" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.9.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
@@ -525,6 +586,108 @@ server.registerTool("resolve_issue",
       if (e) { e.status = "resolved"; e.fix = fix; e.resolvedDate = today(); writeIssues(p, entries); return text(`Resolved ${id}.`); }
     }
     return err(`Issue "${id}" not found.`);
+  });
+
+// ----------------------------- initiatives (named, cross-session work tracking) -----------------------------
+
+server.registerTool("start_initiative",
+  { title: "Start an initiative", description: "Start tracking a named, multi-session effort under a codename — a plan plus an evolving todo list stored in <project>/initiatives/<slug>.md, with a pointer kept in the project's auto-loaded AGENTS.md under '## Active Initiatives' so a BRAND NEW session sees it's in flight without calling any tool. Call this PROACTIVELY when the user names a multi-step effort with a codename or asks you to 'track this as X' / 'remember this under the name X' — don't wait to be asked. If the codename already exists, returns the existing initiative unchanged (safe to call again on a resumed session) rather than overwriting progress.", inputSchema: {
+      project: z.string(),
+      codename: z.string().describe("A short memorable name, e.g. 'HashGate'."),
+      plan: z.string().describe("The plan/analysis for this effort."),
+      todos: z.array(z.string()).optional().describe("Initial todo items, if known."),
+  } },
+  async ({ project, codename, plan, todos }) => {
+    if (!projectExists(project)) return err(`No AGENTS.md for "${project}".`);
+    const slug = slugify(codename);
+    if (!slug) return err("codename must contain at least one alphanumeric character.");
+    if (fs.existsSync(initiativePath(project, slug))) {
+      return text(`"${codename}" already exists — returning it unchanged so nothing gets overwritten:\n\n` + readInitiative(project, slug));
+    }
+    const date = today();
+    const todoLines = (todos || []).map((t) => `- [ ] ${t}`).join("\n");
+    const body = `# ${codename}\n\n- Status: active\n- Started: ${date}\n- Updated: ${date}\n\n## Plan\n${plan}\n\n## Todos\n${todoLines}\n\n## Progress log\n- ${date}: started\n`;
+    writeInitiative(project, slug, body);
+    syncInitiativePointer(project, slug, codename, "active");
+    return text(`Started "${codename}" → ${project}/initiatives/${slug}.md (pointer added to AGENTS.md's Active Initiatives).`);
+  });
+
+server.registerTool("get_initiative",
+  { title: "Get an initiative", description: "Fetch the full plan/todos/progress log for one named initiative by codename (case/spacing-insensitive — 'hash gate' matches 'HashGate'). Call this PROACTIVELY at the start of a session when the user references resuming a specific named effort. If the codename doesn't resolve, lists that project's known initiatives instead of erroring blindly.", inputSchema: { project: z.string(), codename: z.string() } },
+  async ({ project, codename }) => {
+    if (!projectExists(project)) return err(`No AGENTS.md for "${project}".`);
+    const slug = resolveInitiative(project, codename);
+    if (!slug) {
+      const known = listInitiativeSlugs(project);
+      return err(`No initiative matching "${codename}" in ${project}.` + (known.length ? ` Known: ${known.join(", ")}` : " No initiatives tracked yet — use start_initiative."));
+    }
+    return text(readInitiative(project, slug));
+  });
+
+server.registerTool("list_initiatives",
+  { title: "List initiatives", description: "List named initiatives (codename, status, last updated) across one project or — if project is omitted — ALL projects, most-recently-updated first. Call this PROACTIVELY when the user references resuming past work ('continue X', 'where were we on Y') WITHOUT stating an exact codename or which project, instead of guessing or searching blindly.", inputSchema: { project: z.string().optional(), status: z.enum(["active", "paused", "done"]).optional() } },
+  async ({ project, status }) => {
+    const scope = project ? [project] : listProjectDirs();
+    const rows = [];
+    for (const p of scope) {
+      for (const slug of listInitiativeSlugs(p)) {
+        const meta = initiativeMeta(readInitiative(p, slug));
+        if (status && meta.status !== status) continue;
+        rows.push({ p, slug, ...meta });
+      }
+    }
+    if (!rows.length) return text("No initiatives tracked" + (project ? ` in ${project}` : "") + (status ? ` with status "${status}"` : "") + ".");
+    rows.sort((a, b) => (a.updated < b.updated ? 1 : a.updated > b.updated ? -1 : 0));
+    return text(rows.map((r) => `- ${r.title} [${r.p}] (${r.status}, updated ${r.updated}) — ${r.p}/initiatives/${r.slug}.md`).join("\n"));
+  });
+
+server.registerTool("update_initiative",
+  { title: "Update an initiative", description: "Update a named initiative: append a dated progress-log line, add new todos, check off completed todos (matched by case-insensitive substring against existing unchecked items), and/or change status. Call this PROACTIVELY as todos complete or real progress happens — not just at session end — then tell the user in one line what you recorded. Setting status to 'done' removes its pointer from AGENTS.md's Active Initiatives (the file itself is kept as history, still reachable via get_initiative/list_initiatives).", inputSchema: {
+      project: z.string(),
+      codename: z.string(),
+      progress: z.string().optional().describe("A line to append to the progress log (dated automatically)."),
+      add_todos: z.array(z.string()).optional(),
+      complete_todos: z.array(z.string()).optional().describe("Substrings matching existing unchecked todo lines to check off."),
+      status: z.enum(["active", "paused", "done"]).optional(),
+  } },
+  async ({ project, codename, progress, add_todos, complete_todos, status }) => {
+    if (!projectExists(project)) return err(`No AGENTS.md for "${project}".`);
+    const slug = resolveInitiative(project, codename);
+    if (!slug) {
+      const known = listInitiativeSlugs(project);
+      return err(`No initiative matching "${codename}" in ${project}.` + (known.length ? ` Known: ${known.join(", ")}` : " No initiatives tracked yet — use start_initiative."));
+    }
+    let body = readInitiative(project, slug);
+    const date = today();
+    const changes = [];
+
+    if (add_todos?.length) {
+      const insertion = add_todos.map((t) => `- [ ] ${t}`).join("\n");
+      body = /## Todos\n/.test(body) ? body.replace(/## Todos\n/, `## Todos\n${insertion}\n`) : body.trimEnd() + `\n\n## Todos\n${insertion}\n`;
+      changes.push(`+${add_todos.length} todo(s)`);
+    }
+    if (complete_todos?.length) {
+      let n = 0;
+      body = body.split("\n").map((l) => {
+        if (!/^- \[ \] /.test(l)) return l;
+        if (!complete_todos.some((t) => l.toLowerCase().includes(t.toLowerCase()))) return l;
+        n++; return l.replace("- [ ] ", "- [x] ");
+      }).join("\n");
+      if (n) changes.push(`checked off ${n} todo(s)`);
+    }
+    if (progress) {
+      const line = `- ${date}: ${progress}`;
+      body = /## Progress log\n/.test(body) ? body.replace(/## Progress log\n/, `## Progress log\n${line}\n`) : body.trimEnd() + `\n\n## Progress log\n${line}\n`;
+      changes.push("logged progress");
+    }
+    const newStatus = status || initiativeMeta(body).status;
+    body = body.replace(/^-\s*Status:\s*\S+/mi, `- Status: ${newStatus}`).replace(/^-\s*Updated:\s*\S+/mi, `- Updated: ${date}`);
+    if (status) changes.push(`status → ${status}`);
+
+    writeInitiative(project, slug, body);
+    const title = initiativeMeta(body).title;
+    syncInitiativePointer(project, slug, title, newStatus);
+    return text(`Updated "${title}"${changes.length ? `: ${changes.join(", ")}` : " (no changes given)"}.`);
   });
 
 // ----------------------------- registry sync & code↔memory linking -----------------------------
