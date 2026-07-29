@@ -238,6 +238,13 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
   workflow. Both were previously entirely absent, which is why Glama's quality page showed
   "CI status not available" and "No code scanning findings" — those weren't clean bills of
   health, they meant "never measured."
+- **Fix:** Regenerated `package-lock.json` — it predated `@xenova/transformers` ever being
+  resolved with optional deps included, so `npm ci` failed on a clean CI runner. Also ran
+  `npm audit fix` (non-breaking), which cleared the `@modelcontextprotocol/sdk`-transitive
+  `hono`/`body-parser`/`fast-uri` advisories. **Known issue:** `@xenova/transformers`
+  (optional, powers semantic recall) still pulls in a critical + 4 high severity CVEs via
+  its `onnxruntime-web`/`protobufjs`/`sharp` chain; the only fix is a breaking downgrade to
+  `1.4.2`, deliberately not done yet — tracked as a follow-up.
 
 ### v1.8.2
 - **Docs/meta:** Added `glama.json` (declares `maintainers`) to fix Glama's "No glama.json"
