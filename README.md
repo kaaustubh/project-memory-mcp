@@ -47,6 +47,7 @@ file-based memory keeps working without it.
 - `sync_registry` — reconcile the root `AGENTS.md` projects table with what's on disk (adds rows for new projects, flags stale ones)
 - `find_by_file` — given a file path, surface the issues + decisions/learnings that touch it ("why is this code like this?")
 - `start_initiative`, `get_initiative`, `list_initiatives`, `update_initiative` — track a named, multi-session effort (a codename, a plan, an evolving todo list) so it's resumable from any future session by name, not just within the one that started it; see **Initiatives** below
+- `check_in`, `check_out` — stamp the start/end of the working day and record a standup summary composed from evidence harvested off disk (git commits across every repo, uncommitted WIP, memory writes, initiative progress); the next morning's `check_in` hands the summary back — that's your standup. Print it any time, no agent needed: `npx -y @kaaustubh/project-memory-mcp standup`
 
 > You don't call these directly — you talk to your agent in natural language and it picks
 > the tool. See **Using it day to day** below for what to actually say.
@@ -261,6 +262,23 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 `## Run / build / test`, `## Decisions`, `## Learnings` sections.
 
 ## Changelog
+
+### v1.11.0
+- **Feature: daily worklog — `check_in` / `check_out` tools + a `standup` subcommand.** Say
+  "check in" at the start of your day and "checkout" at the end. Checkout harvests the day's
+  EVIDENCE from disk — git commits across every repo under the root (with or without an
+  `AGENTS.md`; `.memory-server` itself included), uncommitted WIP per repo, memory writes
+  (issues/decisions/learnings/preferences) dated that day, and initiative files touched in
+  the window — then the agent composes a 3–6 bullet standup summary strictly from that
+  evidence and stores it (a two-pass tool protocol that works in any MCP client, since the
+  day usually spans sessions the closing agent never saw). The next morning's `check_in`
+  returns the LAST WORKING day's summary (Friday's, on a Monday) plus loose threads (active
+  initiatives with open todos, open issues), and `npx -y @kaaustubh/project-memory-mcp
+  standup [YYYY-MM-DD]` prints it straight to the terminal with no agent at all. Days live
+  in `ROOT/.worklog/YYYY-MM-DD.json` — local-time stamps with offset, multiple
+  check-in/checkout segments per day (lunch breaks), and a forgotten checkout is auto-closed
+  and reconstructed from timestamps at the next check-in. Entries are pruned after
+  `WORKLOG_KEEP_DAYS` (default 10): deliberately ephemeral, unlike the append-only memory files.
 
 ### v1.10.0
 - **Feature:** `install` now also registers **Kimi Code CLI** (`~/.kimi-code/mcp.json`, or

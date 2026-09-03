@@ -135,6 +135,129 @@ function syncInitiativePointer(project, slug, title, status) {
   }
 }
 
+// --- worklog (ROOT/.worklog/YYYY-MM-DD.json — daily check-in/checkout + standup) ------
+// A rolling, EPHEMERAL record of working days: check_in stamps the day's start (and hands
+// back the last working day's summary — that's the standup moment), check_out stamps the
+// end and stores a summary composed from EVIDENCE harvested off disk (git commits across
+// all repos, uncommitted WIP, memory writes, initiative progress) — never from the closing
+// agent's recollection, because a day usually spans sessions and clients that agent never
+// saw. Files older than WORKLOG_KEEP_DAYS (default 10 — long enough to bridge a long
+// weekend) are pruned on check_in. This is the server's first deliberately-deleting
+// feature: unlike the append-only memory files, a worklog is ephemeral by nature.
+const WORKLOG_KEEP_DAYS = Math.max(2, parseInt(process.env.WORKLOG_KEEP_DAYS || "10", 10) || 10);
+function pad2(n) { return String(n).padStart(2, "0"); }
+function tzSuffix(d = new Date()) {
+  const off = -d.getTimezoneOffset();
+  return `${off >= 0 ? "+" : "-"}${pad2(Math.floor(Math.abs(off) / 60))}:${pad2(Math.abs(off) % 60)}`;
+}
+// LOCAL-time stamps (with offset), not UTC — a 00:30 checkout must land on the calendar
+// day the user experienced, and `today()` (UTC) can differ from it around midnight.
+function nowIso(d = new Date()) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}${tzSuffix(d)}`;
+}
+function localDate(d = new Date()) { return nowIso(d).slice(0, 10); }
+function worklogDir() { return path.join(ROOT, ".worklog"); }
+function worklogPath(date) { return path.join(worklogDir(), `${date}.json`); }
+function readWorklog(date) {
+  try { return JSON.parse(fs.readFileSync(worklogPath(date), "utf8")); } catch { return null; }
+}
+function writeWorklog(day) {
+  fs.mkdirSync(worklogDir(), { recursive: true });
+  fs.writeFileSync(worklogPath(day.date), JSON.stringify(day, null, 2) + "\n");
+}
+function listWorklogDates() {
+  if (!fs.existsSync(worklogDir())) return [];
+  return fs.readdirSync(worklogDir()).filter((f) => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).map((f) => f.slice(0, -5)).sort();
+}
+function pruneWorklogs() {
+  const cutoff = localDate(new Date(Date.now() - WORKLOG_KEEP_DAYS * 86400000));
+  for (const d of listWorklogDates()) if (d < cutoff) { try { fs.unlinkSync(worklogPath(d)); } catch {} }
+}
+// Git-bearing dirs for the harvest. Deliberately WIDER than listProjectDirs: a repo with
+// no AGENTS.md is still real work for standup purposes, and .memory-server itself counts
+// too even though project discovery self-excludes it — its commits are work like any other.
+function gitDirs() {
+  return fs.readdirSync(ROOT, { withFileTypes: true })
+    .filter((d) => d.isDirectory() && !SKIP.has(d.name) && (!d.name.startsWith(".") || d.name === ".memory-server"))
+    .map((d) => d.name)
+    .filter((name) => fs.existsSync(path.join(ROOT, name, ".git")))
+    .sort();
+}
+function git(dir, args) {
+  const r = spawnSync("git", ["-C", path.join(ROOT, dir), ...args], { encoding: "utf8" });
+  return r.status === 0 ? (r.stdout || "") : "";
+}
+// Deterministic evidence for one worklog day: commits + dirty WIP per repo, memory writes
+// dated inside the day, initiative files touched inside the window. Memory items are
+// stamped with `today()` (UTC) while the worklog day is local, so around midnight the two
+// can disagree — match against the local date AND the window endpoints' UTC dates.
+function harvestDay(day) {
+  const since = day.segments[0]?.in || `${day.date}T00:00:00${tzSuffix()}`;
+  const until = day.segments.map((s) => s.out).filter(Boolean).sort().pop() || nowIso();
+  const h = { commits: [], wip: [], memory: [], initiatives: [] };
+  for (const dir of gitDirs()) {
+    for (const line of git(dir, ["log", `--since=${since}`, `--until=${until}`, "--pretty=format:%h\t%s"]).split("\n").filter(Boolean)) {
+      const [sha, ...msg] = line.split("\t");
+      h.commits.push({ project: dir, sha, msg: msg.join("\t") });
+    }
+    const dirty = git(dir, ["status", "--porcelain"]).split("\n").filter(Boolean).length;
+    if (dirty) h.wip.push({ project: dir, files: dirty, branch: git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).trim() || "?" });
+  }
+  const sinceMs = Date.parse(since), untilMs = Date.parse(until);
+  const dset = new Set([day.date, new Date(sinceMs).toISOString().slice(0, 10), new Date(untilMs).toISOString().slice(0, 10)]);
+  for (const p of listProjectDirs()) {
+    for (const e of readIssues(p)) {
+      if (dset.has(e.date) || dset.has(e.resolvedDate))
+        h.memory.push({ project: p, kind: "issue", text: `[${e.id}] (${e.status}) ${e.symptom}` });
+    }
+    for (const it of memoryItems(p)) {
+      if (it.kind !== "issue" && [...dset].some((d) => it.text.startsWith(d)))
+        h.memory.push({ project: p, kind: it.kind, text: it.text.slice(11).trim() });
+    }
+    for (const slug of listInitiativeSlugs(p)) {
+      let st; try { st = fs.statSync(initiativePath(p, slug)); } catch { continue; }
+      if (st.mtimeMs < sinceMs || st.mtimeMs > untilMs) continue;
+      const body = readInitiative(p, slug);
+      const meta = initiativeMeta(body);
+      const done = (body.match(/^- \[x\] /gmi) || []).length, open = (body.match(/^- \[ \] /gm) || []).length;
+      h.initiatives.push({ project: p, title: meta.title, status: meta.status, done, total: done + open });
+    }
+  }
+  return h;
+}
+function renderHarvest(h) {
+  const out = [];
+  for (const c of h.commits) out.push(`- ${c.project}: ${c.msg} (${c.sha})`);
+  for (const w of h.wip) out.push(`- ${w.project}: WIP — ${w.files} uncommitted file(s) on branch ${w.branch}`);
+  for (const m of h.memory) out.push(`- ${m.project} [${m.kind}] ${m.text.length > 140 ? m.text.slice(0, 140) + "…" : m.text}`);
+  for (const i of h.initiatives) out.push(`- ${i.project} initiative "${i.title}": ${i.done}/${i.total} todos done (${i.status})`);
+  return out.length ? out.join("\n") : "(no commits, WIP, memory writes, or initiative activity found in the window)";
+}
+function renderStandup(day) {
+  const segs = day.segments.map((s) => `${(s.in || "?").slice(11, 16)}–${s.out ? s.out.slice(11, 16) : "…"}`).join(", ");
+  const head = `Standup — ${day.date} (${segs})${day.reconstructed ? " [reconstructed — no checkout was recorded]" : ""}`;
+  const body = day.summary || `No composed summary — raw evidence:\n${renderHarvest(day.harvest || { commits: [], wip: [], memory: [], initiatives: [] })}`;
+  return `${head}\n${body}`;
+}
+// Close any past day left dangling (checked in, never out): stamp end-of-day, harvest by
+// timestamps, mark reconstructed. The evidence is all on disk, so a forgotten checkout
+// still yields a truthful (if unpolished) standup the next morning.
+function closeDanglingDays() {
+  const todayD = localDate();
+  const closed = [];
+  for (const d of listWorklogDates()) {
+    if (d >= todayD) continue;
+    const day = readWorklog(d);
+    if (!day || !day.segments?.some((s) => !s.out)) continue;
+    for (const s of day.segments) if (!s.out) s.out = `${d}T23:59:59${tzSuffix()}`;
+    day.reconstructed = true;
+    day.harvest = harvestDay(day);
+    writeWorklog(day);
+    closed.push(d);
+  }
+  return closed;
+}
+
 // --- semantic embeddings (OPTIONAL, offline after first model fetch) -----------------
 // The recall hook and `reindex` use these to match a prompt against memory by MEANING,
 // not shared substrings. Everything is soft: if @xenova/transformers isn't installed (or
@@ -453,6 +576,24 @@ if (process.argv[2] === "reindex") {
   process.exit(0);
 }
 
+// `... standup [YYYY-MM-DD]` — print a recorded day's standup to stdout. No agent, no MCP
+// client needed: run it in a terminal thirty seconds before the meeting. Defaults to the
+// most recent recorded day (which on a Monday is Friday — "yesterday" means "last working
+// day", not date-minus-one).
+if (process.argv[2] === "standup") {
+  const dates = listWorklogDates();
+  const date = process.argv[3] || dates[dates.length - 1];
+  const day = date && readWorklog(date);
+  if (!day) {
+    console.error(process.argv[3]
+      ? `No worklog for ${process.argv[3]}. Recorded: ${dates.join(", ") || "(none)"}`
+      : "No worklog entries yet — check in / check out via your agent first.");
+    process.exit(1);
+  }
+  console.log(renderStandup(day));
+  process.exit(0);
+}
+
 // `... install-hook|uninstall-hook` (Stop = guaranteed-capture) and
 // `... install-recall|uninstall-recall` (UserPromptSubmit = auto-recall) — register/remove the
 // respective hook in ~/.claude/settings.json. Both OPT-IN: plain `install` adds NEITHER.
@@ -492,9 +633,10 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - After discovering a durable gotcha/workaround, call append_learning.
 - After the user corrects how you work, or states a durable preference (code style, workflow habit, a "from now on" rule), call remember_preference — scope "global" for a cross-project habit, "project" for one project. Preferences ride the auto-loaded AGENTS.md, so they come back next session and turn a one-time correction into a remembered pattern.
 - When the user names a multi-step effort with a codename (or says "track this as X" / "remember this under the name X"), call start_initiative so it's resumable by name from any future session — don't just track it in your own head or a session-local todo list. Call update_initiative proactively as todos complete or real progress happens, not just at session end. If the user references resuming past work WITHOUT an exact codename or project ("continue X", "where were we?"), call list_initiatives first instead of guessing.
+- When the user starts their day ("check in", "starting my day", "good morning"), call check_in — it returns the last working day's standup summary and loose threads. When they wrap up ("checkout", "done for today", "wrapping up"), call check_out following its two-step protocol: first with NO summary to receive the day's evidence harvested from disk, then IMMEDIATELY again with a short composed standup summary built strictly from that evidence.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.10.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.11.0" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 
@@ -735,6 +877,63 @@ server.registerTool("update_initiative",
     const title = initiativeMeta(body).title;
     syncInitiativePointer(project, slug, title, newStatus);
     return text(`Updated "${title}"${changes.length ? `: ${changes.join(", ")}` : " (no changes given)"}.`);
+  });
+
+// ----------------------------- worklog (daily check-in/checkout + standup) -----------------------------
+
+server.registerTool("check_in",
+  { title: "Check in (start of day)", description: "Stamp the start of the working day and get the standup briefing. Call when the user says 'check in' / 'starting my day' / 'good morning'. Prunes worklog entries older than WORKLOG_KEEP_DAYS (default 10), closes any past day that was never checked out (reconstructing its evidence from disk), opens today's segment, and returns the LAST WORKING DAY's standup summary (Friday's, on a Monday) plus loose threads (active initiatives with open todos, open issues) — read that summary back to the user; it's what they say in standup. Safe to call again after a lunch break: a second check_in the same day just opens a new segment.", inputSchema: {} },
+  async () => {
+    pruneWorklogs();
+    const closed = closeDanglingDays();
+    const date = localDate();
+    const day = readWorklog(date) || { date, segments: [], harvest: null, summary: null };
+    // A second check_in while a segment is still open = a break that never got a checkout;
+    // close the stale segment at now rather than leaving two open.
+    for (const s of day.segments) if (!s.out) s.out = nowIso();
+    day.segments.push({ in: nowIso(), out: null });
+    writeWorklog(day);
+
+    const out = [`Checked in ${date} at ${nowIso().slice(11, 16)}.`];
+    if (closed.length) out.push(`(Closed dangling day(s) with no checkout, evidence reconstructed: ${closed.join(", ")}.)`);
+    const prev = listWorklogDates().filter((d) => d < date).pop();
+    out.push("", prev ? renderStandup(readWorklog(prev)) : "No previous worklog day recorded yet — first check-in.");
+    const threads = [];
+    for (const p of listProjectDirs()) {
+      for (const slug of listInitiativeSlugs(p)) {
+        const body = readInitiative(p, slug);
+        const meta = initiativeMeta(body);
+        const openTodos = (body.match(/^- \[ \] /gm) || []).length;
+        if (meta.status === "active" && openTodos) threads.push(`- ${p} initiative "${meta.title}": ${openTodos} open todo(s)`);
+      }
+      for (const e of readIssues(p)) if (e.status !== "resolved") threads.push(`- ${p} [${e.id}] ${e.symptom}`);
+    }
+    if (threads.length) out.push("", "Loose threads:", ...threads.slice(0, 8), ...(threads.length > 8 ? [`(+${threads.length - 8} more — list_open_issues / list_initiatives for all)`] : []));
+    return text(out.join("\n"));
+  });
+
+server.registerTool("check_out",
+  { title: "Check out (end of day)", description: "Stamp the end of the working day and record a standup summary for the next morning. TWO-STEP PROTOCOL — follow it exactly: (1) when the user says 'checkout' / 'done for today' / 'wrapping up', call check_out with NO summary — it closes the day and returns the evidence harvested from disk (git commits across ALL repos, uncommitted WIP, memory writes, initiative progress); (2) compose a short first-person standup summary (3-6 bullets) STRICTLY from that returned evidence — the day may span sessions and clients you never saw, so NEVER summarize from your own recollection — and immediately call check_out AGAIN with the summary argument to store it. Calling with a summary again later just updates the stored summary. Works even if the user never checked in today (assumes start-of-day).", inputSchema: {
+      summary: z.string().optional().describe("The composed standup summary. OMIT on the first call; pass it on the immediate second call, composed strictly from the evidence the first call returned."),
+  } },
+  async ({ summary }) => {
+    const date = localDate();
+    const day = readWorklog(date) || { date, segments: [{ in: `${date}T00:00:00${tzSuffix()}`, out: null, implicit: true }], harvest: null, summary: null };
+    for (const s of day.segments) if (!s.out) s.out = nowIso();
+    day.harvest = harvestDay(day);
+    if (summary) day.summary = summary;
+    writeWorklog(day);
+    if (summary) {
+      return text(`Checked out — standup summary recorded for ${date}. It'll be returned at the next check_in, or any time via: npx -y ${PKG} standup\n\n${renderStandup(day)}`);
+    }
+    return text([
+      `Checked out ${date} at ${nowIso().slice(11, 16)}.${day.segments[0]?.implicit ? " (No check_in was recorded today — window assumed from start of day.)" : ""}`,
+      "",
+      "Evidence harvested from disk:",
+      renderHarvest(day.harvest),
+      "",
+      "NOW: compose a short first-person standup summary (3-6 bullets) STRICTLY from the evidence above, then call check_out again with it as the `summary` argument. Do not skip this second call.",
+    ].join("\n"));
   });
 
 // ----------------------------- registry sync & code↔memory linking -----------------------------

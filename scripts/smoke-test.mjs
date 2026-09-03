@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,7 @@ const EXPECTED_TOOLS = [
   "append_learning", "remember_preference", "log_issue", "search_issues",
   "list_open_issues", "resolve_issue", "sync_registry", "find_by_file",
   "start_initiative", "get_initiative", "list_initiatives", "update_initiative",
+  "check_in", "check_out",
 ];
 
 // A minimal project so the initiative tools (which require an existing AGENTS.md) have
@@ -122,11 +123,29 @@ async function main() {
   const listedDone = await call("list_initiatives", { project: PROJECT, status: "done" });
   assert(listedDone.includes("HashGate"), "list_initiatives(status:done) should still find the completed initiative");
 
+  // --- exercise the worklog lifecycle: check_in → log work → two-pass check_out → standup CLI ---
+  const ci = await call("check_in", {});
+  assert(ci.includes("Checked in"), "check_in should confirm the check-in");
+  await call("log_issue", { project: PROJECT, symptom: "smoke worklog issue", fix: "n/a" });
+  const co1 = await call("check_out", {});
+  assert(co1.includes("Evidence harvested"), "first check_out should return harvested evidence");
+  assert(co1.includes("smoke worklog issue"), "harvest should include the issue logged today");
+  assert(co1.includes("call check_out again"), "first check_out should instruct the two-pass summary call");
+  const co2 = await call("check_out", { summary: "- did smoke-test things" });
+  assert(co2.includes("standup summary recorded"), "second check_out should store the summary");
+
   child.kill();
   await exitPromise;
+
+  const st = spawnSync(process.execPath, [indexPath, "standup"], {
+    env: { ...process.env, PROJECT_MEMORY_ROOT: scratchRoot }, encoding: "utf8",
+  });
+  assert(st.status === 0, `standup subcommand should exit 0 (stderr: ${st.stderr})`);
+  assert(st.stdout.includes("did smoke-test things"), "standup subcommand should print the recorded summary");
+
   rmSync(scratchRoot, { recursive: true, force: true });
 
-  console.log(`OK: server initialized as "${initResp.result.serverInfo.name}" v${initResp.result.serverInfo.version}, ${names.length} tools registered, initiatives lifecycle verified end-to-end.`);
+  console.log(`OK: server initialized as "${initResp.result.serverInfo.name}" v${initResp.result.serverInfo.version}, ${names.length} tools registered, initiatives + worklog lifecycles verified end-to-end.`);
 }
 
 main().catch((e) => {
