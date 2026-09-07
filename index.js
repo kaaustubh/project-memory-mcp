@@ -636,7 +636,7 @@ const INSTRUCTIONS = `This server is the project's long-term memory. Use it PROA
 - When the user starts their day ("check in", "starting my day", "good morning"), call check_in — it returns the last working day's standup summary and loose threads. When they wrap up ("checkout", "done for today", "wrapping up"), call check_out following its two-step protocol: first with NO summary to receive the day's evidence harvested from disk, then IMMEDIATELY again with a short composed standup summary built strictly from that evidence.
 Always tell the user in one short line what you recorded. When unsure whether something is worth storing, ASK rather than logging noise. Skip trivial/transient issues. Never store secrets or credentials.`;
 
-const server = new McpServer({ name: "project-memory", version: "1.11.0" }, { instructions: INSTRUCTIONS });
+const server = new McpServer({ name: "project-memory", version: "1.11.1" }, { instructions: INSTRUCTIONS });
 
 // ----------------------------- project memory (AGENTS.md) -----------------------------
 

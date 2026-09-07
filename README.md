@@ -263,6 +263,27 @@ and a `<project>/AGENTS.md` with `## What this is`, `## Stack & layout`,
 
 ## Changelog
 
+### v1.11.1
+- **Fix:** regenerated `package-lock.json` — it still declared `1.8.3` while `package.json`
+  had moved through 1.9.0/1.10.0/1.11.0, because the release convention bumped the version
+  in `package.json` + the `McpServer({version})` string but never refreshed the lock. Not
+  fatal to `npm ci` (verified on npm 10/11/12), but it's the same drift class that hard-broke
+  CI in v1.8.3.
+- **Fix:** `scripts/` is now in the `files` whitelist, so `npm test` works from an installed
+  package. Previously the smoke test wasn't in the published tarball, so a container build
+  spec doing `npm install && npm test` died with `MODULE_NOT_FOUND` — it only worked from a
+  repo clone.
+- **Fix:** added a `start` script (`node index.js`), so a build/deploy spec whose CMD is
+  `npm start` no longer fails on a missing script.
+- **Docs:** if you're building this in a container (Glama's Deploy build test, or your own
+  image), use **`npm ci --omit=optional`**. A full `npm ci` pulls **276 MB** of
+  `node_modules` for a 36 KB server — almost all of it the *optional* embeddings chain
+  (`onnxruntime-node`, `onnxruntime-web`, `@xenova/transformers`, `sharp`), which also
+  downloads prebuilt binaries during install and dies on a disk/time-capped or
+  network-restricted builder. `--omit=optional` gives **25 MB** and all 18 tools still
+  register; semantic recall simply falls back to keyword recall, as designed in v1.6.0.
+  Recommended spec: Node 20 · `npm ci --omit=optional` · CMD `node index.js`.
+
 ### v1.11.0
 - **Feature: daily worklog — `check_in` / `check_out` tools + a `standup` subcommand.** Say
   "check in" at the start of your day and "checkout" at the end. Checkout harvests the day's

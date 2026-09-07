@@ -1,6 +1,6 @@
 {
   "name": "@kaaustubh/project-memory-mcp",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "mcpName": "io.github.kaaustubh/project-memory-mcp",
   "type": "module",
   "description": "Local MCP server giving AI coding agents (Claude Code, Cursor, VS Code Copilot) a shared, persistent memory of your projects and the bugs you've faced.",
@@ -9,6 +9,7 @@
   },
   "files": [
     "index.js",
+    "scripts",
     "README.md",
     "LICENSE"
   ],
@@ -16,6 +17,7 @@
     "node": ">=18"
   },
   "scripts": {
+    "start": "node index.js",
     "test": "node scripts/smoke-test.mjs"
   },
   "keywords": [
